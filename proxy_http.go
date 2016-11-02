@@ -83,7 +83,7 @@ func (ic *httpInterceptor) intercept(w http.ResponseWriter, req *http.Request) e
 	tr := &http.Transport{
 		Dial:                ic.dial,
 		IdleConnTimeout:     ic.idleTimeout,
-		MaxIdleConnsPerHost: 8, // just to keep clients from getting too greedy
+		MaxIdleConnsPerHost: 1, // since we have one transport per downstream connection, we don't need more than this
 	}
 	var err error
 
