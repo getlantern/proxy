@@ -4,11 +4,9 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/getlantern/golog"
-	"github.com/getlantern/ops"
 )
 
 var (
@@ -17,12 +15,9 @@ var (
 
 type DialFunc func(network, addr string) (conn net.Conn, err error)
 
-type Interceptor func(op ops.Op, w http.ResponseWriter, req *http.Request)
-
-func isUnexpected(err error) bool {
-	text := err.Error()
-	return !strings.HasSuffix(text, "EOF") && !strings.Contains(text, "use of closed network connection") && !strings.Contains(text, "Use of idled network connection")
-}
+// Interceptor is a function that will intercept a connection to an HTTP server
+// and start proxying traffic. If proxying fails, it will return an error.
+type Interceptor func(w http.ResponseWriter, req *http.Request) error
 
 func addIdleKeepAlive(header http.Header, idleTimeout time.Duration) {
 	if idleTimeout > 0 {

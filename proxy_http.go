@@ -7,11 +7,11 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/getlantern/errors"
 	"github.com/getlantern/hidden"
-	"github.com/getlantern/ops"
 )
 
 // HTTP returns a Handler that processes plain-text HTTP requests.
@@ -78,7 +78,7 @@ type httpInterceptor struct {
 	dial                DialFunc
 }
 
-func (ic *httpInterceptor) intercept(op ops.Op, w http.ResponseWriter, req *http.Request) {
+func (ic *httpInterceptor) intercept(w http.ResponseWriter, req *http.Request) error {
 	var downstream net.Conn
 	var downstreamBuffered *bufio.ReadWriter
 	tr := &http.Transport{
@@ -101,16 +101,16 @@ func (ic *httpInterceptor) intercept(op ops.Op, w http.ResponseWriter, req *http
 	// Hijack underlying connection.
 	downstream, downstreamBuffered, err = w.(http.Hijacker).Hijack()
 	if err != nil {
-		respondBadGateway(w, op.FailIf(errors.New("Unable to hijack connection: %s", err)))
-		return
+		fullErr := errors.New("Unable to hijack connection: %s", err)
+		respondBadGateway(w, fullErr)
+		return fullErr
 	}
 	closeDownstream = true
 
-	ic.processRequests(op, req.RemoteAddr, req, downstream, downstreamBuffered, tr)
-	return
+	return ic.processRequests(req.RemoteAddr, req, downstream, downstreamBuffered, tr)
 }
 
-func (ic *httpInterceptor) processRequests(op ops.Op, remoteAddr string, req *http.Request, downstream net.Conn, downstreamBuffered *bufio.ReadWriter, tr *http.Transport) {
+func (ic *httpInterceptor) processRequests(remoteAddr string, req *http.Request, downstream net.Conn, downstreamBuffered *bufio.ReadWriter, tr *http.Transport) error {
 	var readErr error
 
 	first := true
@@ -119,37 +119,40 @@ func (ic *httpInterceptor) processRequests(op ops.Op, remoteAddr string, req *ht
 		if discardRequest {
 			err := ic.onRequest(req).Write(ioutil.Discard)
 			if err != nil {
-				log.Debugf("Error discarding first request: %v", err)
-				return
+				return errors.New("Error discarding first request: %v", err)
 			}
 		} else {
 			resp, err := tr.RoundTrip(prepareRequest(ic.onRequest(req)))
 			if err != nil {
-				log.Debugf("Error round tripping: %v", err)
 				errResp := ic.onError(req, err)
 				if errResp != nil {
 					errResp.Request = req
-					ic.writeResponse(op, downstream, errResp)
+					ic.writeResponse(downstream, errResp)
 				}
-				return
+				return err
 			}
-			if !ic.writeResponse(op, downstream, resp) {
-				return
+			writeErr := ic.writeResponse(downstream, resp)
+			if writeErr != nil {
+				if isUnexpected(writeErr) {
+					return errors.New("Unable to write response to downstream: %v", writeErr)
+				}
+				// Error is not unexpected, but we're done
+				return nil
 			}
 		}
 
 		if req.Close {
 			// Client signaled that they would close the connection after this
 			// request, finish
-			return
+			return nil
 		}
 
 		req, readErr = http.ReadRequest(downstreamBuffered.Reader)
 		if readErr != nil {
 			if isUnexpected(readErr) {
-				log.Debug(op.FailIf(errors.New("Unable to read next request from downstream: %v", readErr)))
+				return errors.New("Unable to read next request from downstream: %v", readErr)
 			}
-			break
+			return nil
 		}
 
 		// Preserve remote address from original request
@@ -158,7 +161,7 @@ func (ic *httpInterceptor) processRequests(op ops.Op, remoteAddr string, req *ht
 	}
 }
 
-func (ic *httpInterceptor) writeResponse(op ops.Op, downstream net.Conn, resp *http.Response) bool {
+func (ic *httpInterceptor) writeResponse(downstream net.Conn, resp *http.Response) error {
 	var out io.Writer = downstream
 	belowHTTP11 := !resp.Request.ProtoAtLeast(1, 1)
 	if belowHTTP11 && resp.StatusCode < 200 {
@@ -168,14 +171,7 @@ func (ic *httpInterceptor) writeResponse(op ops.Op, downstream net.Conn, resp *h
 	} else {
 		resp = ic.onResponse(prepareResponse(resp, belowHTTP11))
 	}
-	writeErr := resp.Write(out)
-	if writeErr != nil {
-		if isUnexpected(writeErr) {
-			log.Debug(op.FailIf(errors.New("Unable to write response to downstream: %v", writeErr)))
-		}
-		return false
-	}
-	return true
+	return resp.Write(out)
 }
 
 // prepareRequest prepares the request in line with the HTTP spec for proxies.
@@ -286,6 +282,11 @@ func respondBadGateway(w http.ResponseWriter, err error) {
 	if _, writeError := w.Write([]byte(hidden.Clean(err.Error()))); writeError != nil {
 		log.Debugf("Error writing error to ResponseWriter: %v", writeError)
 	}
+}
+
+func isUnexpected(err error) bool {
+	text := err.Error()
+	return !strings.HasSuffix(text, "EOF") && !strings.Contains(text, "use of closed network connection") && !strings.Contains(text, "Use of idled network connection") && !strings.Contains(text, "broken pipe")
 }
 
 func defaultOnRequest(req *http.Request) *http.Request {

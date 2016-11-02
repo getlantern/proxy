@@ -7,7 +7,6 @@ import (
 	"github.com/getlantern/fdcount"
 	"github.com/getlantern/httptest"
 	"github.com/getlantern/mockconn"
-	"github.com/getlantern/ops"
 	"github.com/stretchr/testify/assert"
 	"io/ioutil"
 	"net"
@@ -22,9 +21,6 @@ const (
 )
 
 func TestDialFailure(t *testing.T) {
-	op := ops.Begin("TestDialFailure")
-	defer op.End()
-
 	errorText := "I don't want to dial"
 	d := mockconn.FailingDialer(errors.New(errorText))
 	w := httptest.NewRecorder(nil)
@@ -36,8 +32,10 @@ func TestDialFailure(t *testing.T) {
 	}
 	h := HTTP(false, 0, nil, nil, onError, d.Dial)
 	req, _ := http.NewRequest("CONNECT", "http://thehost:123", nil)
-	go h(op, w, req)
-	time.Sleep(100 * time.Millisecond)
+	err := h(w, req)
+	if !assert.Error(t, err, "Should have gotten error") {
+		return
+	}
 	assert.Equal(t, "thehost:123", d.LastDialed(), "Should have used specified port of 123")
 	resp, err := http.ReadResponse(bufio.NewReader(w.Body()), req)
 	if !assert.NoError(t, err) {
@@ -52,20 +50,18 @@ func TestDialFailure(t *testing.T) {
 }
 
 func TestCONNECT(t *testing.T) {
-	doTest(t, ops.Begin("TestCONNECT"), "CONNECT", false)
+	doTest(t, "CONNECT", false)
 }
 
 func TestHTTPForwardFirst(t *testing.T) {
-	doTest(t, ops.Begin("TestHTTPForwardFirst"), "GET", false)
+	doTest(t, "GET", false)
 }
 
 func TestHTTPDontForwardFirst(t *testing.T) {
-	doTest(t, ops.Begin("TestHTTPDontForwardFirst"), "GET", true)
+	doTest(t, "GET", true)
 }
 
-func doTest(t *testing.T, op ops.Op, requestMethod string, discardFirstRequest bool) {
-	defer op.End()
-
+func doTest(t *testing.T, requestMethod string, discardFirstRequest bool) {
 	l, err := net.Listen("tcp", "localhost:0")
 	if !assert.NoError(t, err) {
 		return
@@ -108,7 +104,7 @@ func doTest(t *testing.T, op ops.Op, requestMethod string, discardFirstRequest b
 	}
 
 	go http.Serve(pl, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		intercept(op, w, req)
+		intercept(w, req)
 	}))
 
 	_, counter, err := fdcount.Matching("TCP")

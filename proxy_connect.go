@@ -7,13 +7,13 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/getlantern/errors"
 	"github.com/getlantern/hidden"
 	"github.com/getlantern/idletiming"
 	"github.com/getlantern/netx"
-	"github.com/getlantern/ops"
 )
 
 // BufferSource is a source for buffers used in reading/writing.
@@ -61,7 +61,7 @@ type connectInterceptor struct {
 	dial         DialFunc
 }
 
-func (ic *connectInterceptor) connect(op ops.Op, w http.ResponseWriter, req *http.Request) {
+func (ic *connectInterceptor) connect(w http.ResponseWriter, req *http.Request) error {
 	var downstream net.Conn
 	var upstream net.Conn
 	var err error
@@ -84,23 +84,26 @@ func (ic *connectInterceptor) connect(op ops.Op, w http.ResponseWriter, req *htt
 	// Hijack underlying connection.
 	downstream, _, err = w.(http.Hijacker).Hijack()
 	if err != nil {
-		respondBadGateway(w, op.FailIf(errors.New("Unable to hijack connection: %s", err)))
-		return
+		fullErr := errors.New("Unable to hijack connection: %s", err)
+		respondBadGateway(w, fullErr)
+		return fullErr
 	}
 	closeDownstream = true
 
 	upstream, err = ic.dial("tcp", ic.hostIncludingPort(req))
 	if err != nil {
-		ic.respondBadGatewayHijacked(downstream, req, err)
-		return
+		fullErr := errors.New("Unable to dial upstream: %s", err)
+		ic.respondBadGatewayHijacked(downstream, req, fullErr)
+		return fullErr
 	}
 	closeUpstream = true
 
 	// Send OK response
 	err = ic.respondOK(downstream, req, w.Header())
 	if err != nil {
-		op.FailIf(log.Errorf("Unable to respond OK: %s", err))
-		return
+		fullErr := errors.New("Unable to respond OK: %s", err)
+		log.Error(fullErr)
+		return fullErr
 	}
 
 	// Pipe data between the client and the proxy.
@@ -111,11 +114,14 @@ func (ic *connectInterceptor) connect(op ops.Op, w http.ResponseWriter, req *htt
 	writeErr, readErr := netx.BidiCopy(upstream, downstream, bufOut, bufIn)
 	// Note - we ignore idled errors because these are okay per the HTTP spec.
 	// See https://www.w3.org/Protocols/rfc2616/rfc2616-sec8.html#sec8.1.4
-	if readErr != nil && readErr != io.EOF {
-		log.Debugf("Error piping data to downstream: %v", readErr)
+	// We also ignore "broken pipe" errors on piping to downstream because they're
+	// usually caused by the client disconnecting and we don't worry about that.
+	if readErr != nil && readErr != io.EOF && !strings.Contains(readErr.Error(), "broken pipe") {
+		return errors.New("Error piping data to downstream: %v", readErr)
 	} else if writeErr != nil && writeErr != idletiming.ErrIdled {
-		log.Debugf("Error piping data to upstream: %v", writeErr)
+		return errors.New("Error piping data to upstream: %v", writeErr)
 	}
+	return nil
 }
 
 // hostIncludingPort extracts the host:port from a request.  It fills in a
