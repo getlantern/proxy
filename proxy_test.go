@@ -24,15 +24,31 @@ const (
 func TestDialFailure(t *testing.T) {
 	op := ops.Begin("TestDialFailure")
 	defer op.End()
-	d := mockconn.FailingDialer(errors.New("I don't want to dial"))
+
+	errorText := "I don't want to dial"
+	d := mockconn.FailingDialer(errors.New(errorText))
 	w := httptest.NewRecorder(nil)
-	h := HTTP(false, 0, nil, nil, d.Dial)
+	onError := func(req *http.Request, err error) *http.Response {
+		return &http.Response{
+			StatusCode: http.StatusBadGateway,
+			Body:       ioutil.NopCloser(bytes.NewReader([]byte(err.Error()))),
+		}
+	}
+	h := HTTP(false, 0, nil, nil, onError, d.Dial)
 	req, _ := http.NewRequest("CONNECT", "http://thehost:123", nil)
 	go h(op, w, req)
 	time.Sleep(100 * time.Millisecond)
 	assert.Equal(t, "thehost:123", d.LastDialed(), "Should have used specified port of 123")
-	body := w.Body().String()
-	assert.Empty(t, body)
+	resp, err := http.ReadResponse(bufio.NewReader(w.Body()), req)
+	if !assert.NoError(t, err) {
+		return
+	}
+	assert.Equal(t, http.StatusBadGateway, resp.StatusCode)
+	body, err := ioutil.ReadAll(resp.Body)
+	if !assert.NoError(t, err) {
+		return
+	}
+	assert.Equal(t, errorText, string(body))
 }
 
 func TestCONNECT(t *testing.T) {
@@ -88,7 +104,7 @@ func doTest(t *testing.T, op ops.Op, requestMethod string, discardFirstRequest b
 	if isConnect {
 		intercept = CONNECT(756, 30*time.Second, nil, dial)
 	} else {
-		intercept = HTTP(discardFirstRequest, 30*time.Second, onRequest, nil, dial)
+		intercept = HTTP(discardFirstRequest, 30*time.Second, onRequest, nil, nil, dial)
 	}
 
 	go http.Serve(pl, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {

@@ -26,12 +26,17 @@ import (
 //
 // onResponse: if specified, is called on every read response
 //
+// onError: if specified, if there's an error making a round trip, this function
+// can return a response to be presented to the client. If the function returns
+// no response, nothing is written to the client.
+//
 // dial: the function that's used to dial upstream
 func HTTP(
 	discardFirstRequest bool,
 	idleTimeout time.Duration,
 	onRequest func(req *http.Request) *http.Request,
 	onResponse func(resp *http.Response) *http.Response,
+	onError func(req *http.Request, err error) *http.Response,
 	dial DialFunc,
 ) Interceptor {
 	// Apply defaults
@@ -40,6 +45,9 @@ func HTTP(
 	}
 	if onResponse == nil {
 		onResponse = defaultOnResponse
+	}
+	if onError == nil {
+		onError = defaultOnError
 	}
 	if idleTimeout > 0 {
 		origOnResponse := onResponse
@@ -55,6 +63,7 @@ func HTTP(
 		idleTimeout:         idleTimeout,
 		onRequest:           onRequest,
 		onResponse:          onResponse,
+		onError:             onError,
 		dial:                dial,
 	}
 	return ic.intercept
@@ -65,6 +74,7 @@ type httpInterceptor struct {
 	idleTimeout         time.Duration
 	onRequest           func(req *http.Request) *http.Request
 	onResponse          func(resp *http.Response) *http.Response
+	onError             func(req *http.Request, err error) *http.Response
 	dial                DialFunc
 }
 
@@ -116,6 +126,11 @@ func (ic *httpInterceptor) processRequests(op ops.Op, remoteAddr string, req *ht
 			resp, err := tr.RoundTrip(prepareRequest(ic.onRequest(req)))
 			if err != nil {
 				log.Debugf("Error round tripping: %v", err)
+				errResp := ic.onError(req, err)
+				if errResp != nil {
+					errResp.Request = req
+					ic.writeResponse(op, downstream, errResp)
+				}
 				return
 			}
 			if !ic.writeResponse(op, downstream, resp) {
@@ -279,4 +294,8 @@ func defaultOnRequest(req *http.Request) *http.Request {
 
 func defaultOnResponse(resp *http.Response) *http.Response {
 	return resp
+}
+
+func defaultOnError(req *http.Request, err error) *http.Response {
+	return nil
 }
