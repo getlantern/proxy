@@ -6,7 +6,6 @@ import (
 	"io/ioutil"
 	"net"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -24,9 +23,6 @@ type BufferSource interface {
 
 // CONNECT returns a Handler that processes CONNECT requests.
 //
-// defaultPort: specifies which port to use if none was found in the initial
-// request
-//
 // idleTimeout: if specified, lets us know to include an appropriate
 // KeepAlive: timeout header in the CONNECT response
 //
@@ -34,7 +30,6 @@ type BufferSource interface {
 //
 // dial: the function that's used to dial upstream
 func CONNECT(
-	defaultPort int,
 	idleTimeout time.Duration,
 	bufferSource BufferSource,
 	dial DialFunc,
@@ -45,7 +40,6 @@ func CONNECT(
 	}
 
 	ic := &connectInterceptor{
-		defaultPort:  defaultPort,
 		idleTimeout:  idleTimeout,
 		bufferSource: bufferSource,
 		dial:         dial,
@@ -56,7 +50,6 @@ func CONNECT(
 // interceptor configures an Interceptor.
 type connectInterceptor struct {
 	idleTimeout  time.Duration
-	defaultPort  int
 	bufferSource BufferSource
 	dial         DialFunc
 }
@@ -90,7 +83,10 @@ func (ic *connectInterceptor) connect(w http.ResponseWriter, req *http.Request) 
 	}
 	closeDownstream = true
 
-	upstream, err = ic.dial("tcp", ic.hostIncludingPort(req))
+	// Note - for CONNECT requests, we use the Host from the request URL, not the
+	// Host header. See discussion here:
+	// https://ask.wireshark.org/questions/22988/http-host-header-with-and-without-port-number
+	upstream, err = ic.dial("tcp", req.URL.Host)
 	if err != nil {
 		fullErr := errors.New("Unable to dial upstream: %s", err)
 		ic.respondBadGatewayHijacked(downstream, req, fullErr)
@@ -122,16 +118,6 @@ func (ic *connectInterceptor) connect(w http.ResponseWriter, req *http.Request) 
 		return errors.New("Error piping data to upstream: %v", writeErr)
 	}
 	return nil
-}
-
-// hostIncludingPort extracts the host:port from a request.  It fills in a
-// a default port if none was found in the request.
-func (ic *connectInterceptor) hostIncludingPort(req *http.Request) string {
-	_, port, err := net.SplitHostPort(req.Host)
-	if port == "" || err != nil {
-		return req.Host + ":" + strconv.Itoa(ic.defaultPort)
-	}
-	return req.Host
 }
 
 func (ic *connectInterceptor) respondOK(writer io.Writer, req *http.Request, respHeaders http.Header) error {

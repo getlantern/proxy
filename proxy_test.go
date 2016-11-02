@@ -98,7 +98,7 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool) {
 	isConnect := requestMethod == "CONNECT"
 	var intercept Interceptor
 	if isConnect {
-		intercept = CONNECT(756, 30*time.Second, nil, dial)
+		intercept = CONNECT(30*time.Second, nil, dial)
 	} else {
 		intercept = HTTP(discardFirstRequest, 30*time.Second, onRequest, nil, nil, dial)
 	}
@@ -141,7 +141,7 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool) {
 		return nil, "", nil
 	}
 
-	req, _ := http.NewRequest(requestMethod, "http://subdomain.thehost", nil)
+	req, _ := http.NewRequest(requestMethod, "http://subdomain.thehost:756", nil)
 	req.RemoteAddr = "remoteaddr:134"
 
 	includeFirst := isConnect || !discardFirstRequest
@@ -150,7 +150,9 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool) {
 		return
 	}
 	if !isConnect && !discardFirstRequest {
-		assert.Equal(t, "subdomain.thehost", body, "Should have left port alone")
+		assert.Equal(t, "subdomain.thehost:756", body, "Should have left port alone")
+	}
+	if !discardFirstRequest {
 		assert.Contains(t, resp.Header.Get("Keep-Alive"), "timeout", "First response's headers should contain a Keep-Alive timeout")
 	}
 
