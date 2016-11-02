@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"errors"
+	"fmt"
 	"github.com/getlantern/fdcount"
 	"github.com/getlantern/httptest"
 	"github.com/getlantern/mockconn"
@@ -20,7 +21,7 @@ const (
 	okHeader = "X-Test-OK"
 )
 
-func TestDialFailure(t *testing.T) {
+func TestDialFailureHTTP(t *testing.T) {
 	errorText := "I don't want to dial"
 	d := mockconn.FailingDialer(errors.New(errorText))
 	w := httptest.NewRecorder(nil)
@@ -31,7 +32,7 @@ func TestDialFailure(t *testing.T) {
 		}
 	}
 	h := HTTP(false, 0, nil, nil, onError, d.Dial)
-	req, _ := http.NewRequest("CONNECT", "http://thehost:123", nil)
+	req, _ := http.NewRequest("GET", "http://thehost:123", nil)
 	err := h(w, req)
 	if !assert.Error(t, err, "Should have gotten error") {
 		return
@@ -47,6 +48,26 @@ func TestDialFailure(t *testing.T) {
 		return
 	}
 	assert.Equal(t, errorText, string(body))
+}
+
+func TestDialFailureCONNECT(t *testing.T) {
+	errorText := "I don't want to dial"
+	d := mockconn.FailingDialer(errors.New(errorText))
+	w := httptest.NewRecorder(nil)
+	h := CONNECT(0, nil, d.Dial)
+	req, _ := http.NewRequest("CONNECT", "http://thehost:123", nil)
+	err := h(w, req)
+	if !assert.Error(t, err, "Should have gotten error") {
+		return
+	}
+	assert.Equal(t, "thehost:123", d.LastDialed(), "Should have used specified port of 123")
+	resp := w.Result()
+	assert.Equal(t, http.StatusBadGateway, resp.StatusCode)
+	body, err := ioutil.ReadAll(resp.Body)
+	if !assert.NoError(t, err) {
+		return
+	}
+	assert.Equal(t, fmt.Sprintf("Unable to dial upstream: %v", errorText), string(body))
 }
 
 func TestCONNECT(t *testing.T) {

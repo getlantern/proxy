@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/getlantern/errors"
-	"github.com/getlantern/hidden"
 )
 
 // HTTP returns a Handler that processes plain-text HTTP requests.
@@ -274,14 +273,6 @@ func contains(k string, s []string) bool {
 		}
 	}
 	return false
-}
-
-func respondBadGateway(w http.ResponseWriter, err error) {
-	log.Debugf("Responding BadGateway: %v", err)
-	w.WriteHeader(http.StatusBadGateway)
-	if _, writeError := w.Write([]byte(hidden.Clean(err.Error()))); writeError != nil {
-		log.Debugf("Error writing error to ResponseWriter: %v", writeError)
-	}
 }
 
 func isUnexpected(err error) bool {

@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/getlantern/errors"
-	"github.com/getlantern/hidden"
 	"github.com/getlantern/idletiming"
 	"github.com/getlantern/netx"
 )
@@ -74,6 +73,18 @@ func (ic *connectInterceptor) connect(w http.ResponseWriter, req *http.Request) 
 		}
 	}()
 
+	// Note - for CONNECT requests, we use the Host from the request URL, not the
+	// Host header. See discussion here:
+	// https://ask.wireshark.org/questions/22988/http-host-header-with-and-without-port-number
+	upstream, err = ic.dial("tcp", req.URL.Host)
+	if err != nil {
+		fullErr := errors.New("Unable to dial upstream: %s", err)
+		log.Debug(fullErr)
+		respondBadGateway(w, fullErr)
+		return fullErr
+	}
+	closeUpstream = true
+
 	// Hijack underlying connection.
 	downstream, _, err = w.(http.Hijacker).Hijack()
 	if err != nil {
@@ -82,17 +93,6 @@ func (ic *connectInterceptor) connect(w http.ResponseWriter, req *http.Request) 
 		return fullErr
 	}
 	closeDownstream = true
-
-	// Note - for CONNECT requests, we use the Host from the request URL, not the
-	// Host header. See discussion here:
-	// https://ask.wireshark.org/questions/22988/http-host-header-with-and-without-port-number
-	upstream, err = ic.dial("tcp", req.URL.Host)
-	if err != nil {
-		fullErr := errors.New("Unable to dial upstream: %s", err)
-		ic.respondBadGatewayHijacked(downstream, req, fullErr)
-		return fullErr
-	}
-	closeUpstream = true
 
 	// Send OK response
 	err = ic.respondOK(downstream, req, w.Header())
@@ -123,15 +123,6 @@ func (ic *connectInterceptor) connect(w http.ResponseWriter, req *http.Request) 
 func (ic *connectInterceptor) respondOK(writer io.Writer, req *http.Request, respHeaders http.Header) error {
 	addIdleKeepAlive(respHeaders, ic.idleTimeout)
 	return ic.respondHijacked(writer, req, http.StatusOK, respHeaders, nil)
-}
-
-func (ic *connectInterceptor) respondBadGatewayHijacked(writer io.Writer, req *http.Request, err error) error {
-	log.Debugf("Responding %v", http.StatusBadGateway)
-	var body []byte
-	if err != nil {
-		body = []byte(hidden.Clean(err.Error()))
-	}
-	return ic.respondHijacked(writer, req, http.StatusBadGateway, make(http.Header), body)
 }
 
 func (ic *connectInterceptor) respondHijacked(writer io.Writer, req *http.Request, statusCode int, respHeaders http.Header, body []byte) error {
