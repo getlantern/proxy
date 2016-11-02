@@ -160,8 +160,8 @@ func (ic *httpInterceptor) processRequests(remoteAddr string, req *http.Request,
 	}
 }
 
-func (ic *httpInterceptor) writeResponse(downstream net.Conn, resp *http.Response) error {
-	var out io.Writer = downstream
+func (ic *httpInterceptor) writeResponse(downstream io.Writer, resp *http.Response) error {
+	out := downstream
 	belowHTTP11 := !resp.Request.ProtoAtLeast(1, 1)
 	if belowHTTP11 && resp.StatusCode < 200 {
 		// HTTP 1.0 doesn't define status codes below 200, discard response
