@@ -19,7 +19,7 @@ import (
 // discarded
 //
 // idleTimeout: if specified, lets us know to include an appropriate
-// KeepAlive: timeout header in the CONNECT response
+// KeepAlive: timeout header in the HTTP responses
 //
 // onRequest: if specified, is called on every read request
 //
@@ -38,6 +38,17 @@ func HTTP(
 	onError func(req *http.Request, err error) *http.Response,
 	dial DialFunc,
 ) Interceptor {
+	return buildHTTP(discardFirstRequest, idleTimeout, onRequest, onResponse, onError, dial).intercept
+}
+
+func buildHTTP(
+	discardFirstRequest bool,
+	idleTimeout time.Duration,
+	onRequest func(req *http.Request) *http.Request,
+	onResponse func(resp *http.Response) *http.Response,
+	onError func(req *http.Request, err error) *http.Response,
+	dial DialFunc,
+) *httpInterceptor {
 	// Apply defaults
 	if onRequest == nil {
 		onRequest = defaultOnRequest
@@ -65,7 +76,7 @@ func HTTP(
 		onError:             onError,
 		dial:                dial,
 	}
-	return ic.intercept
+	return ic
 }
 
 type httpInterceptor struct {
@@ -106,14 +117,17 @@ func (ic *httpInterceptor) intercept(w http.ResponseWriter, req *http.Request) e
 	}
 	closeDownstream = true
 
-	return ic.processRequests(req.RemoteAddr, req, downstream, downstreamBuffered, tr)
+	return ic.processRequests(req.RemoteAddr, req, downstream, downstreamBuffered, tr.RoundTrip)
 }
 
-func (ic *httpInterceptor) processRequests(remoteAddr string, req *http.Request, downstream net.Conn, downstreamBuffered *bufio.ReadWriter, tr *http.Transport) error {
+func (ic *httpInterceptor) processRequests(remoteAddr string, req *http.Request, downstream net.Conn, downstreamBuffered *bufio.ReadWriter, roundTrip func(*http.Request) (*http.Response, error)) error {
 	var readErr error
 
 	first := true
 	for {
+		// Preserve remote address from original request
+		req.RemoteAddr = remoteAddr
+
 		discardRequest := first && ic.discardFirstRequest
 		if discardRequest {
 			err := ic.onRequest(req).Write(ioutil.Discard)
@@ -121,7 +135,7 @@ func (ic *httpInterceptor) processRequests(remoteAddr string, req *http.Request,
 				return errors.New("Error discarding first request: %v", err)
 			}
 		} else {
-			resp, err := tr.RoundTrip(prepareRequest(ic.onRequest(req)))
+			resp, err := roundTrip(prepareRequest(ic.onRequest(req)))
 			if err != nil {
 				errResp := ic.onError(req, err)
 				if errResp != nil {
@@ -154,8 +168,6 @@ func (ic *httpInterceptor) processRequests(remoteAddr string, req *http.Request,
 			return nil
 		}
 
-		// Preserve remote address from original request
-		req.RemoteAddr = remoteAddr
 		first = false
 	}
 }

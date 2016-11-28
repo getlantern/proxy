@@ -3,15 +3,20 @@ package proxy
 import (
 	"bufio"
 	"bytes"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"github.com/getlantern/fdcount"
 	"github.com/getlantern/httptest"
+	"github.com/getlantern/keyman"
+	"github.com/getlantern/mitm"
 	"github.com/getlantern/mockconn"
+	"github.com/getlantern/tlsdefaults"
 	"github.com/stretchr/testify/assert"
 	"io/ioutil"
 	"net"
 	"net/http"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -20,6 +25,14 @@ import (
 const (
 	okHeader = "X-Test-OK"
 )
+
+func init() {
+	// Clean up certs
+	os.Remove("serverpk.pem")
+	os.Remove("servercert.pem")
+	os.Remove("proxypk.pem")
+	os.Remove("proxycert.pem")
+}
 
 func TestDialFailureHTTP(t *testing.T) {
 	errorText := "I don't want to dial"
@@ -54,7 +67,10 @@ func TestDialFailureCONNECT(t *testing.T) {
 	errorText := "I don't want to dial"
 	d := mockconn.FailingDialer(errors.New(errorText))
 	w := httptest.NewRecorder(nil)
-	h := CONNECT(0, nil, d.Dial)
+	h, buildErr := CONNECT(0, nil, nil, d.Dial)
+	if !assert.NoError(t, buildErr) {
+		return
+	}
 	req, _ := http.NewRequest("CONNECT", "http://thehost:123", nil)
 	err := h(w, req)
 	if !assert.Error(t, err, "Should have gotten error") {
@@ -70,24 +86,33 @@ func TestDialFailureCONNECT(t *testing.T) {
 	assert.Equal(t, fmt.Sprintf("Unable to dial upstream: %v", errorText), string(body))
 }
 
-func TestCONNECT(t *testing.T) {
-	doTest(t, "CONNECT", false)
+func TestCONNECTNoMITM(t *testing.T) {
+	doTest(t, http.MethodConnect, false, false)
+}
+
+func TestCONNECTMITM(t *testing.T) {
+	doTest(t, http.MethodConnect, false, true)
 }
 
 func TestHTTPForwardFirst(t *testing.T) {
-	doTest(t, "GET", false)
+	doTest(t, http.MethodGet, false, false)
 }
 
 func TestHTTPDontForwardFirst(t *testing.T) {
-	doTest(t, "GET", true)
+	doTest(t, http.MethodGet, true, false)
 }
 
-func doTest(t *testing.T, requestMethod string, discardFirstRequest bool) {
-	l, err := net.Listen("tcp", "localhost:0")
+func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, shouldMITM bool) {
+	l, err := tlsdefaults.Listen("localhost:0", "serverpk.pem", "servercert.pem")
 	if !assert.NoError(t, err) {
 		return
 	}
 	defer l.Close()
+
+	serverCert, err := keyman.LoadCertificateFromFile("servercert.pem")
+	if !assert.NoError(t, err) {
+		return
+	}
 
 	pl, err := net.Listen("tcp", "localhost:0")
 	if !assert.NoError(t, err) {
@@ -106,6 +131,12 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool) {
 	}))
 
 	dial := func(network, addr string) (net.Conn, error) {
+		if requestMethod == http.MethodGet {
+			return tls.Dial("tcp", l.Addr().String(), &tls.Config{
+				ServerName: "localhost",
+				RootCAs:    serverCert.PoolContainingCert(),
+			})
+		}
 		return net.Dial("tcp", l.Addr().String())
 	}
 
@@ -119,7 +150,23 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool) {
 	isConnect := requestMethod == "CONNECT"
 	var intercept Interceptor
 	if isConnect {
-		intercept = CONNECT(30*time.Second, nil, dial)
+		var mitmOpts *MITMOpts
+		if shouldMITM {
+			mitmOpts = &MITMOpts{
+				Opts: mitm.Opts{
+					PKFile:   "proxypk.pem",
+					CertFile: "proxycert.pem",
+					ClientTLSConfig: &tls.Config{
+						RootCAs: serverCert.PoolContainingCert(),
+					},
+				},
+				OnRequest: onRequest,
+			}
+		}
+		intercept, err = CONNECT(30*time.Second, nil, mitmOpts, dial)
+		if !assert.NoError(t, err) {
+			return
+		}
 	} else {
 		intercept = HTTP(discardFirstRequest, 30*time.Second, onRequest, nil, nil, dial)
 	}
@@ -175,6 +222,29 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool) {
 	}
 	if !discardFirstRequest {
 		assert.Contains(t, resp.Header.Get("Keep-Alive"), "timeout", "First response's headers should contain a Keep-Alive timeout")
+	}
+
+	if isConnect {
+		log.Debug("Upgrading to TLS")
+		// Upgrade to TLS
+		var tlsConfig *tls.Config
+		if shouldMITM {
+			proxyCert, err := keyman.LoadCertificateFromFile("proxycert.pem")
+			if !assert.NoError(t, err) {
+				return
+			}
+			tlsConfig = &tls.Config{
+				ServerName: "localhost",
+				RootCAs:    proxyCert.PoolContainingCert(),
+			}
+		} else {
+			tlsConfig = &tls.Config{
+				ServerName: "localhost",
+				RootCAs:    serverCert.PoolContainingCert(),
+			}
+		}
+		conn = tls.Client(conn, tlsConfig)
+		br = bufio.NewReader(conn)
 	}
 
 	nestedReqBody := []byte("My Request")

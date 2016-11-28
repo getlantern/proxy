@@ -1,0 +1,6 @@
+cert.pem
+pk.pem
+proxycert.pem
+proxypk.pem
+servercert.pem
+serverpk.pem
