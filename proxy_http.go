@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bufio"
+	"context"
 	"io"
 	"io/ioutil"
 	"net"
@@ -77,13 +78,19 @@ type httpInterceptor struct {
 	dial                DialFunc
 }
 
-func (ic *httpInterceptor) intercept(w http.ResponseWriter, req *http.Request) error {
+func (ic *httpInterceptor) intercept(ctx context.Context, w http.ResponseWriter, req *http.Request) error {
 	var downstream net.Conn
 	var downstreamBuffered *bufio.ReadWriter
 	tr := &http.Transport{
-		Dial:                ic.dial,
-		IdleConnTimeout:     ic.idleTimeout,
-		MaxIdleConnsPerHost: 1, // since we have one transport per downstream connection, we don't need more than this
+		// Note: don't use DialContext here, as the Transport is used on its own,
+		// instead of by http.Client.
+		Dial: func(net, addr string) (net.Conn, error) {
+			return ic.dial(ctx, net, addr)
+		},
+		IdleConnTimeout: ic.idleTimeout,
+		// since we have one transport per downstream connection, we don't need
+		// more than this
+		MaxIdleConnsPerHost: 1,
 	}
 	var err error
 
