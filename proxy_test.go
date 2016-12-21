@@ -3,18 +3,20 @@ package proxy
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
-	"github.com/getlantern/fdcount"
-	"github.com/getlantern/httptest"
-	"github.com/getlantern/mockconn"
-	"github.com/stretchr/testify/assert"
 	"io/ioutil"
 	"net"
 	"net/http"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/getlantern/fdcount"
+	"github.com/getlantern/httptest"
+	"github.com/getlantern/mockconn"
+	"github.com/stretchr/testify/assert"
 )
 
 const (
@@ -31,9 +33,11 @@ func TestDialFailureHTTP(t *testing.T) {
 			Body:       ioutil.NopCloser(bytes.NewReader([]byte(err.Error()))),
 		}
 	}
-	h := HTTP(false, 0, nil, nil, onError, d.Dial)
+	h := HTTP(false, 0, nil, nil, onError, func(ctx context.Context, net, addr string) (net.Conn, error) {
+		return d.Dial(net, addr)
+	})
 	req, _ := http.NewRequest("GET", "http://thehost:123", nil)
-	err := h(w, req)
+	err := h(context.Background(), w, req)
 	if !assert.Error(t, err, "Should have gotten error") {
 		return
 	}
@@ -54,9 +58,11 @@ func TestDialFailureCONNECT(t *testing.T) {
 	errorText := "I don't want to dial"
 	d := mockconn.FailingDialer(errors.New(errorText))
 	w := httptest.NewRecorder(nil)
-	h := CONNECT(0, nil, d.Dial)
+	h := CONNECT(0, nil, func(ctx context.Context, net, addr string) (net.Conn, error) {
+		return d.Dial(net, addr)
+	})
 	req, _ := http.NewRequest("CONNECT", "http://thehost:123", nil)
-	err := h(w, req)
+	err := h(context.Background(), w, req)
 	if !assert.Error(t, err, "Should have gotten error") {
 		return
 	}
@@ -68,6 +74,33 @@ func TestDialFailureCONNECT(t *testing.T) {
 		return
 	}
 	assert.Equal(t, fmt.Sprintf("Unable to dial upstream: %v", errorText), string(body))
+}
+
+func TestDialWithTimeout(t *testing.T) {
+	d := mockconn.SucceedingDialer(nil)
+	w := httptest.NewRecorder(nil)
+	h := CONNECT(0, nil, func(ctx context.Context, net, addr string) (net.Conn, error) {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+			return d.Dial(net, addr)
+		}
+	})
+	req, _ := http.NewRequest("CONNECT", "http://thehost:123", nil)
+	ctx, _ := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	err := h(ctx, w, req)
+	if !assert.Error(t, err, "Should have gotten error") {
+		return
+	}
+	assert.Equal(t, "", d.LastDialed(), "Should have not dialed")
+	resp := w.Result()
+	assert.Equal(t, http.StatusBadGateway, resp.StatusCode)
+	body, err := ioutil.ReadAll(resp.Body)
+	if !assert.NoError(t, err) {
+		return
+	}
+	assert.Equal(t, "Unable to dial upstream: context deadline exceeded", string(body))
 }
 
 func TestCONNECT(t *testing.T) {
@@ -105,7 +138,7 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool) {
 		w.Write([]byte(req.Host))
 	}))
 
-	dial := func(network, addr string) (net.Conn, error) {
+	dial := func(ctx context.Context, network, addr string) (net.Conn, error) {
 		return net.Dial("tcp", l.Addr().String())
 	}
 
@@ -125,7 +158,7 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool) {
 	}
 
 	go http.Serve(pl, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		intercept(w, req)
+		intercept(context.Background(), w, req)
 	}))
 
 	_, counter, err := fdcount.Matching("TCP")

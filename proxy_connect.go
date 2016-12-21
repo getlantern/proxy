@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"io/ioutil"
 	"net"
@@ -53,7 +54,7 @@ type connectInterceptor struct {
 	dial         DialFunc
 }
 
-func (ic *connectInterceptor) connect(w http.ResponseWriter, req *http.Request) error {
+func (ic *connectInterceptor) connect(ctx context.Context, w http.ResponseWriter, req *http.Request) error {
 	var downstream net.Conn
 	var upstream net.Conn
 	var err error
@@ -76,7 +77,7 @@ func (ic *connectInterceptor) connect(w http.ResponseWriter, req *http.Request) 
 	// Note - for CONNECT requests, we use the Host from the request URL, not the
 	// Host header. See discussion here:
 	// https://ask.wireshark.org/questions/22988/http-host-header-with-and-without-port-number
-	upstream, err = ic.dial("tcp", req.URL.Host)
+	upstream, err = ic.dial(ctx, "tcp", req.URL.Host)
 	if err != nil {
 		fullErr := errors.New("Unable to dial upstream: %s", err)
 		log.Debug(fullErr)
