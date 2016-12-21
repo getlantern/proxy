@@ -82,8 +82,8 @@ func (ic *httpInterceptor) intercept(ctx context.Context, w http.ResponseWriter,
 	var downstream net.Conn
 	var downstreamBuffered *bufio.ReadWriter
 	tr := &http.Transport{
-		// Note: don't use DialContext here, as the Transport is used on its own,
-		// instead of by http.Client.
+		// Note: set Dial instead of DialContext here as we want to cancel with
+		// the ctx passed in, instead of the context with the request.
 		Dial: func(net, addr string) (net.Conn, error) {
 			return ic.dial(ctx, net, addr)
 		},
