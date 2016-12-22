@@ -18,8 +18,9 @@ var (
 type DialFunc func(ctx context.Context, network, addr string) (conn net.Conn, err error)
 
 // Interceptor is a function that will intercept a connection to an HTTP server
-// and start proxying traffic. If proxying fails, it will return an error.
-type Interceptor func(ctx context.Context, w http.ResponseWriter, req *http.Request) error
+// and start proxying traffic over a connection dialed with the given DialFunc.
+// If proxying fails, it will return an error.
+type Interceptor func(ctx context.Context, w http.ResponseWriter, req *http.Request, dial DialFunc) error
 
 func addIdleKeepAlive(header http.Header, idleTimeout time.Duration) {
 	if idleTimeout > 0 {

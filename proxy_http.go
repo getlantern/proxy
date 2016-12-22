@@ -29,15 +29,12 @@ import (
 // onError: if specified, if there's an error making a round trip, this function
 // can return a response to be presented to the client. If the function returns
 // no response, nothing is written to the client.
-//
-// dial: the function that's used to dial upstream
 func HTTP(
 	discardFirstRequest bool,
 	idleTimeout time.Duration,
 	onRequest func(req *http.Request) *http.Request,
 	onResponse func(resp *http.Response) *http.Response,
 	onError func(req *http.Request, err error) *http.Response,
-	dial DialFunc,
 ) Interceptor {
 	// Apply defaults
 	if onRequest == nil {
@@ -64,7 +61,6 @@ func HTTP(
 		onRequest:           onRequest,
 		onResponse:          onResponse,
 		onError:             onError,
-		dial:                dial,
 	}
 	return ic.intercept
 }
@@ -75,17 +71,16 @@ type httpInterceptor struct {
 	onRequest           func(req *http.Request) *http.Request
 	onResponse          func(resp *http.Response) *http.Response
 	onError             func(req *http.Request, err error) *http.Response
-	dial                DialFunc
 }
 
-func (ic *httpInterceptor) intercept(ctx context.Context, w http.ResponseWriter, req *http.Request) error {
+func (ic *httpInterceptor) intercept(ctx context.Context, w http.ResponseWriter, req *http.Request, dial DialFunc) error {
 	var downstream net.Conn
 	var downstreamBuffered *bufio.ReadWriter
 	tr := &http.Transport{
 		// Note: set Dial instead of DialContext here as we want to cancel with
 		// the ctx passed in, instead of the context with the request.
 		Dial: func(net, addr string) (net.Conn, error) {
-			return ic.dial(ctx, net, addr)
+			return dial(ctx, net, addr)
 		},
 		IdleConnTimeout: ic.idleTimeout,
 		// since we have one transport per downstream connection, we don't need

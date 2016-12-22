@@ -33,11 +33,12 @@ func TestDialFailureHTTP(t *testing.T) {
 			Body:       ioutil.NopCloser(bytes.NewReader([]byte(err.Error()))),
 		}
 	}
-	h := HTTP(false, 0, nil, nil, onError, func(ctx context.Context, net, addr string) (net.Conn, error) {
+	dial := func(ctx context.Context, net, addr string) (net.Conn, error) {
 		return d.Dial(net, addr)
-	})
+	}
+	h := HTTP(false, 0, nil, nil, onError)
 	req, _ := http.NewRequest("GET", "http://thehost:123", nil)
-	err := h(context.Background(), w, req)
+	err := h(context.Background(), w, req, dial)
 	if !assert.Error(t, err, "Should have gotten error") {
 		return
 	}
@@ -58,11 +59,12 @@ func TestDialFailureCONNECT(t *testing.T) {
 	errorText := "I don't want to dial"
 	d := mockconn.FailingDialer(errors.New(errorText))
 	w := httptest.NewRecorder(nil)
-	h := CONNECT(0, nil, func(ctx context.Context, net, addr string) (net.Conn, error) {
+	dial := func(ctx context.Context, net, addr string) (net.Conn, error) {
 		return d.Dial(net, addr)
-	})
+	}
+	h := CONNECT(0, nil)
 	req, _ := http.NewRequest("CONNECT", "http://thehost:123", nil)
-	err := h(context.Background(), w, req)
+	err := h(context.Background(), w, req, dial)
 	if !assert.Error(t, err, "Should have gotten error") {
 		return
 	}
@@ -79,17 +81,19 @@ func TestDialFailureCONNECT(t *testing.T) {
 func TestDialWithTimeout(t *testing.T) {
 	d := mockconn.SucceedingDialer(nil)
 	w := httptest.NewRecorder(nil)
-	h := CONNECT(0, nil, func(ctx context.Context, net, addr string) (net.Conn, error) {
+	dial := func(ctx context.Context, net, addr string) (net.Conn, error) {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-time.After(100 * time.Millisecond):
 			return d.Dial(net, addr)
 		}
-	})
+	}
+	h := CONNECT(0, nil)
 	req, _ := http.NewRequest("CONNECT", "http://thehost:123", nil)
-	ctx, _ := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	err := h(ctx, w, req)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	err := h(ctx, w, req, dial)
 	if !assert.Error(t, err, "Should have gotten error") {
 		return
 	}
@@ -152,13 +156,13 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool) {
 	isConnect := requestMethod == "CONNECT"
 	var intercept Interceptor
 	if isConnect {
-		intercept = CONNECT(30*time.Second, nil, dial)
+		intercept = CONNECT(30*time.Second, nil)
 	} else {
-		intercept = HTTP(discardFirstRequest, 30*time.Second, onRequest, nil, nil, dial)
+		intercept = HTTP(discardFirstRequest, 30*time.Second, onRequest, nil, nil)
 	}
 
 	go http.Serve(pl, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		intercept(context.Background(), w, req)
+		intercept(context.Background(), w, req, dial)
 	}))
 
 	_, counter, err := fdcount.Matching("TCP")
