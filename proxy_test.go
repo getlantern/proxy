@@ -37,10 +37,12 @@ func TestDialFailureHTTP(t *testing.T) {
 		return d.Dial(net, addr)
 	})
 	req, _ := http.NewRequest("GET", "http://thehost:123", nil)
-	err := h(context.Background(), w, req)
+	err, bytesSent, bytesRecv := h(context.Background(), w, req)
 	if !assert.Error(t, err, "Should have gotten error") {
 		return
 	}
+	assert.EqualValues(t, 0, bytesSent)
+	assert.EqualValues(t, 0, bytesRecv)
 	assert.Equal(t, "thehost:123", d.LastDialed(), "Should have used specified port of 123")
 	resp, err := http.ReadResponse(bufio.NewReader(w.Body()), req)
 	if !assert.NoError(t, err) {
@@ -62,10 +64,12 @@ func TestDialFailureCONNECT(t *testing.T) {
 		return d.Dial(net, addr)
 	})
 	req, _ := http.NewRequest("CONNECT", "http://thehost:123", nil)
-	err := h(context.Background(), w, req)
+	err, bytesSent, bytesRecv := h(context.Background(), w, req)
 	if !assert.Error(t, err, "Should have gotten error") {
 		return
 	}
+	assert.EqualValues(t, 0, bytesSent)
+	assert.EqualValues(t, 0, bytesRecv)
 	assert.Equal(t, "thehost:123", d.LastDialed(), "Should have used specified port of 123")
 	resp := w.Result()
 	assert.Equal(t, http.StatusBadGateway, resp.StatusCode)
@@ -88,11 +92,14 @@ func TestDialWithTimeout(t *testing.T) {
 		}
 	})
 	req, _ := http.NewRequest("CONNECT", "http://thehost:123", nil)
-	ctx, _ := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	err := h(ctx, w, req)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	err, bytesSent, bytesRecv := h(ctx, w, req)
 	if !assert.Error(t, err, "Should have gotten error") {
 		return
 	}
+	assert.EqualValues(t, 0, bytesSent)
+	assert.EqualValues(t, 0, bytesRecv)
 	assert.Equal(t, "", d.LastDialed(), "Should have not dialed")
 	resp := w.Result()
 	assert.Equal(t, http.StatusBadGateway, resp.StatusCode)
@@ -158,7 +165,10 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool) {
 	}
 
 	go http.Serve(pl, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		intercept(context.Background(), w, req)
+		err, bytesSent, bytesRecv := intercept(context.Background(), w, req)
+		assert.NoError(t, err)
+		assert.True(t, bytesSent > 0)
+		assert.True(t, bytesRecv > 0)
 	}))
 
 	_, counter, err := fdcount.Matching("TCP")

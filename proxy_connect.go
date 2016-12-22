@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/getlantern/errors"
@@ -54,7 +55,9 @@ type connectInterceptor struct {
 	dial         DialFunc
 }
 
-func (ic *connectInterceptor) connect(ctx context.Context, w http.ResponseWriter, req *http.Request) error {
+func (ic *connectInterceptor) connect(ctx context.Context, w http.ResponseWriter, req *http.Request) (error, int64, int64) {
+	bytesSent, bytesRecv := int64(0), int64(0)
+
 	var downstream net.Conn
 	var upstream net.Conn
 	var err error
@@ -82,8 +85,9 @@ func (ic *connectInterceptor) connect(ctx context.Context, w http.ResponseWriter
 		fullErr := errors.New("Unable to dial upstream: %s", err)
 		log.Debug(fullErr)
 		respondBadGateway(w, fullErr)
-		return fullErr
+		return fullErr, 0, 0
 	}
+	upstream = &countingConn{upstream, &bytesSent, &bytesRecv}
 	closeUpstream = true
 
 	// Hijack underlying connection.
@@ -91,7 +95,7 @@ func (ic *connectInterceptor) connect(ctx context.Context, w http.ResponseWriter
 	if err != nil {
 		fullErr := errors.New("Unable to hijack connection: %s", err)
 		respondBadGateway(w, fullErr)
-		return fullErr
+		return fullErr, atomic.LoadInt64(&bytesSent), atomic.LoadInt64(&bytesRecv)
 	}
 	closeDownstream = true
 
@@ -100,7 +104,7 @@ func (ic *connectInterceptor) connect(ctx context.Context, w http.ResponseWriter
 	if err != nil {
 		fullErr := errors.New("Unable to respond OK: %s", err)
 		log.Error(fullErr)
-		return fullErr
+		return fullErr, atomic.LoadInt64(&bytesSent), atomic.LoadInt64(&bytesRecv)
 	}
 
 	// Pipe data between the client and the proxy.
@@ -114,11 +118,11 @@ func (ic *connectInterceptor) connect(ctx context.Context, w http.ResponseWriter
 	// We also ignore "broken pipe" errors on piping to downstream because they're
 	// usually caused by the client disconnecting and we don't worry about that.
 	if readErr != nil && readErr != io.EOF && !strings.Contains(readErr.Error(), "broken pipe") {
-		return errors.New("Error piping data to downstream: %v", readErr)
+		return errors.New("Error piping data to downstream: %v", readErr), atomic.LoadInt64(&bytesSent), atomic.LoadInt64(&bytesRecv)
 	} else if writeErr != nil && writeErr != idletiming.ErrIdled {
-		return errors.New("Error piping data to upstream: %v", writeErr)
+		return errors.New("Error piping data to upstream: %v", writeErr), atomic.LoadInt64(&bytesSent), atomic.LoadInt64(&bytesRecv)
 	}
-	return nil
+	return nil, atomic.LoadInt64(&bytesSent), atomic.LoadInt64(&bytesRecv)
 }
 
 func (ic *connectInterceptor) respondOK(writer io.Writer, req *http.Request, respHeaders http.Header) error {

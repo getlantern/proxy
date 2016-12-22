@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/getlantern/golog"
@@ -19,7 +20,7 @@ type DialFunc func(ctx context.Context, network, addr string) (conn net.Conn, er
 
 // Interceptor is a function that will intercept a connection to an HTTP server
 // and start proxying traffic. If proxying fails, it will return an error.
-type Interceptor func(ctx context.Context, w http.ResponseWriter, req *http.Request) error
+type Interceptor func(ctx context.Context, w http.ResponseWriter, req *http.Request) (err error, bytesSent int64, bytesRecv int64)
 
 func addIdleKeepAlive(header http.Header, idleTimeout time.Duration) {
 	if idleTimeout > 0 {
@@ -34,4 +35,23 @@ func respondBadGateway(w http.ResponseWriter, err error) {
 	if _, writeError := w.Write([]byte(hidden.Clean(err.Error()))); writeError != nil {
 		log.Debugf("Error writing error to ResponseWriter: %v", writeError)
 	}
+}
+
+// countingConn counts data sent and received
+type countingConn struct {
+	net.Conn
+	bytesSent *int64
+	bytesRecv *int64
+}
+
+func (cc *countingConn) Write(b []byte) (int, error) {
+	n, err := cc.Conn.Write(b)
+	atomic.AddInt64(cc.bytesSent, int64(n))
+	return n, err
+}
+
+func (cc *countingConn) Read(b []byte) (int, error) {
+	n, err := cc.Conn.Read(b)
+	atomic.AddInt64(cc.bytesRecv, int64(n))
+	return n, err
 }

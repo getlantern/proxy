@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/getlantern/errors"
@@ -78,14 +79,20 @@ type httpInterceptor struct {
 	dial                DialFunc
 }
 
-func (ic *httpInterceptor) intercept(ctx context.Context, w http.ResponseWriter, req *http.Request) error {
+func (ic *httpInterceptor) intercept(ctx context.Context, w http.ResponseWriter, req *http.Request) (error, int64, int64) {
+	bytesSent, bytesRecv := int64(0), int64(0)
+
 	var downstream net.Conn
 	var downstreamBuffered *bufio.ReadWriter
 	tr := &http.Transport{
 		// Note: set Dial instead of DialContext here as we want to cancel with
 		// the ctx passed in, instead of the context with the request.
 		Dial: func(net, addr string) (net.Conn, error) {
-			return ic.dial(ctx, net, addr)
+			conn, err := ic.dial(ctx, net, addr)
+			if err == nil {
+				conn = &countingConn{conn, &bytesSent, &bytesRecv}
+			}
+			return conn, err
 		},
 		IdleConnTimeout: ic.idleTimeout,
 		// since we have one transport per downstream connection, we don't need
@@ -109,11 +116,12 @@ func (ic *httpInterceptor) intercept(ctx context.Context, w http.ResponseWriter,
 	if err != nil {
 		fullErr := errors.New("Unable to hijack connection: %s", err)
 		respondBadGateway(w, fullErr)
-		return fullErr
+		return fullErr, atomic.LoadInt64(&bytesSent), atomic.LoadInt64(&bytesRecv)
 	}
 	closeDownstream = true
 
-	return ic.processRequests(req.RemoteAddr, req, downstream, downstreamBuffered, tr)
+	err = ic.processRequests(req.RemoteAddr, req, downstream, downstreamBuffered, tr)
+	return err, atomic.LoadInt64(&bytesSent), atomic.LoadInt64(&bytesRecv)
 }
 
 func (ic *httpInterceptor) processRequests(remoteAddr string, req *http.Request, downstream net.Conn, downstreamBuffered *bufio.ReadWriter, tr *http.Transport) error {
