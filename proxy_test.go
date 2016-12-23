@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"io/ioutil"
 	"net"
 	"net/http"
@@ -73,7 +72,7 @@ func TestDialFailureCONNECT(t *testing.T) {
 	if !assert.NoError(t, err) {
 		return
 	}
-	assert.Equal(t, fmt.Sprintf("Unable to dial upstream: %v", errorText), string(body))
+	assert.Equal(t, errorText, string(body))
 }
 
 func TestDialWithTimeout(t *testing.T) {
@@ -100,7 +99,7 @@ func TestDialWithTimeout(t *testing.T) {
 	if !assert.NoError(t, err) {
 		return
 	}
-	assert.Equal(t, "Unable to dial upstream: context deadline exceeded", string(body))
+	assert.Equal(t, "context deadline exceeded", string(body))
 }
 
 func TestCONNECT(t *testing.T) {
