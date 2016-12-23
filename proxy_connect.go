@@ -77,9 +77,9 @@ func (ic *connectInterceptor) connect(ctx context.Context, w http.ResponseWriter
 	// Hijack underlying connection.
 	downstream, _, err = w.(http.Hijacker).Hijack()
 	if err != nil {
-		// If there's an error hijacking, that's almost certainly because the
-		// connection has died, so there's no point in trying to send some sort
-		// of error response.
+		// If there's an error hijacking, it's because the connection has already
+		// been hijacked (a programming error). Not much we can do other than
+		// return an error.
 		fullErr := errors.New("Unable to hijack connection: %s", err)
 		log.Error(fullErr)
 		return fullErr
