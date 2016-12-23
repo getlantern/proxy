@@ -74,27 +74,24 @@ func (ic *connectInterceptor) connect(ctx context.Context, w http.ResponseWriter
 		}
 	}()
 
-	// Note - for CONNECT requests, we use the Host from the request URL, not the
-	// Host header. See discussion here:
-	// https://ask.wireshark.org/questions/22988/http-host-header-with-and-without-port-number
-	upstream, err = ic.dial(ctx, "tcp", req.URL.Host)
-	if err != nil {
-		fullErr := errors.New("Unable to dial upstream: %s", err)
-		log.Debug(fullErr)
-		respondBadGateway(w, fullErr)
-		return fullErr
-	}
-	closeUpstream = true
-
 	// Hijack underlying connection.
 	downstream, _, err = w.(http.Hijacker).Hijack()
 	if err != nil {
+		// If there's an error hijacking, that's almost certainly because the
+		// connection has died, so there's no point in trying to send some sort
+		// of error response.
 		fullErr := errors.New("Unable to hijack connection: %s", err)
-		respondBadGateway(w, fullErr)
+		log.Error(fullErr)
 		return fullErr
 	}
 	closeDownstream = true
 
+	// We preemptively respond with an OK here. Chrome essentially seems to
+	// to consider an OK response as an indicator that the connection to the
+	// proxy succeeded and not the connection to the destination. We do the same,
+	// in part to avoid Chrome marking Lantern as a bad proxy. See the extensive
+	// discussion here:
+	// https://github.com/getlantern/lantern/issues/5514
 	// Send OK response
 	err = ic.respondOK(downstream, req, w.Header())
 	if err != nil {
@@ -102,6 +99,17 @@ func (ic *connectInterceptor) connect(ctx context.Context, w http.ResponseWriter
 		log.Error(fullErr)
 		return fullErr
 	}
+
+	// Note - for CONNECT requests, we use the Host from the request URL, not the
+	// Host header. See discussion here:
+	// https://ask.wireshark.org/questions/22988/http-host-header-with-and-without-port-number
+	upstream, err = ic.dial(ctx, "tcp", req.URL.Host)
+	if err != nil {
+		fullErr := errors.New("Unable to dial upstream to %s: %s", req.URL.Host, err)
+		log.Error(fullErr)
+		return fullErr
+	}
+	closeUpstream = true
 
 	// Pipe data between the client and the proxy.
 	bufOut := ic.bufferSource.Get()
