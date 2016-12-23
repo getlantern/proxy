@@ -15,6 +15,7 @@ var (
 	log = golog.LoggerFor("proxy")
 )
 
+// DialFunc is the dial function to use for dialing the proxy.
 type DialFunc func(ctx context.Context, network, addr string) (conn net.Conn, err error)
 
 // Interceptor is a function that will intercept a connection to an HTTP server

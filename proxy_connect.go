@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/getlantern/errors"
+	"github.com/getlantern/hidden"
 	"github.com/getlantern/idletiming"
 	"github.com/getlantern/netx"
 )
@@ -28,10 +29,14 @@ type BufferSource interface {
 //
 // bufferSource: specifies a BufferSource, leave nil to use default
 //
+// okWaitsForUpstream: specifies whether or not to wait on dialing upstream
+// before responding OK
+//
 // dial: the function that's used to dial upstream
 func CONNECT(
 	idleTimeout time.Duration,
 	bufferSource BufferSource,
+	okWaitsForUpstream bool,
 	dial DialFunc,
 ) Interceptor {
 	// Apply defaults
@@ -40,18 +45,20 @@ func CONNECT(
 	}
 
 	ic := &connectInterceptor{
-		idleTimeout:  idleTimeout,
-		bufferSource: bufferSource,
-		dial:         dial,
+		idleTimeout:        idleTimeout,
+		bufferSource:       bufferSource,
+		dial:               dial,
+		okWaitsForUpstream: okWaitsForUpstream,
 	}
 	return ic.connect
 }
 
 // interceptor configures an Interceptor.
 type connectInterceptor struct {
-	idleTimeout  time.Duration
-	bufferSource BufferSource
-	dial         DialFunc
+	idleTimeout        time.Duration
+	bufferSource       BufferSource
+	dial               DialFunc
+	okWaitsForUpstream bool
 }
 
 func (ic *connectInterceptor) connect(ctx context.Context, w http.ResponseWriter, req *http.Request) error {
@@ -74,35 +81,58 @@ func (ic *connectInterceptor) connect(ctx context.Context, w http.ResponseWriter
 		}
 	}()
 
-	// Note - for CONNECT requests, we use the Host from the request URL, not the
-	// Host header. See discussion here:
-	// https://ask.wireshark.org/questions/22988/http-host-header-with-and-without-port-number
-	upstream, err = ic.dial(ctx, "tcp", req.URL.Host)
-	if err != nil {
-		fullErr := errors.New("Unable to dial upstream: %s", err)
-		log.Debug(fullErr)
-		respondBadGateway(w, fullErr)
-		return fullErr
-	}
-	closeUpstream = true
-
-	// Hijack underlying connection.
-	downstream, _, err = w.(http.Hijacker).Hijack()
-	if err != nil {
-		fullErr := errors.New("Unable to hijack connection: %s", err)
-		respondBadGateway(w, fullErr)
-		return fullErr
+	if downstream, err = ic.hijack(w); err != nil {
+		return err
 	}
 	closeDownstream = true
 
-	// Send OK response
-	err = ic.respondOK(downstream, req, w.Header())
-	if err != nil {
-		fullErr := errors.New("Unable to respond OK: %s", err)
-		log.Error(fullErr)
-		return fullErr
+	if !ic.okWaitsForUpstream {
+		// We preemptively respond with an OK on the client. Some user agents like
+		// Chrome consider any non-200 OK response from the proxy to indicate that
+		// there's a problem with the proxy rather than the origin, causing the user
+		// agent to mark the proxy itself as bad and avoid using it in the future.
+		// By immediately responding 200 OK irrespective of what happens with the
+		// origin, we are signaling to the user agent that the proxy itself is good.
+		// If there is a subsequent problem dialing the origin, the user agent will
+		// (mostly correctly) attribute that to a problem with the origin rather
+		// than the proxy and continue to consider the proxy good. See the extensive
+		// discussion here: https://github.com/getlantern/lantern/issues/5514.
+		err = ic.respondOK(downstream, req, w.Header())
+		if err != nil {
+			return err
+		}
 	}
 
+	// Note - for CONNECT requests, we use the Host from the request URL, not the
+	// Host header. See discussion here:
+	// https://ask.wireshark.org/questions/22988/http-host-header-with-and-without-port-number
+	if upstream, err = ic.dial(ctx, "tcp", req.URL.Host); err != nil {
+		if ic.okWaitsForUpstream {
+			respondBadGatewayHijacked(downstream, req, w.Header(), err)
+		} else {
+			log.Error(err)
+		}
+		return err
+	}
+	closeUpstream = true
+
+	if ic.okWaitsForUpstream {
+		// In this case, we're waiting to successfully dial upstream before
+		// responding OK. Lantern uses this logic on server-side proxies so that the
+		// Lantern client retains the opportunity to fail over to a different proxy
+		// server just in case that one is able to reach the origin. This is
+		// relevant, for example, if some proxy servers reside in jurisdictions
+		// where an origin site is blocked but other proxy servers don't.
+		err = ic.respondOK(downstream, req, w.Header())
+		if err != nil {
+			return err
+		}
+	}
+
+	return ic.copy(upstream, downstream)
+}
+
+func (ic *connectInterceptor) copy(upstream, downstream net.Conn) error {
 	// Pipe data between the client and the proxy.
 	bufOut := ic.bufferSource.Get()
 	bufIn := ic.bufferSource.Get()
@@ -121,12 +151,37 @@ func (ic *connectInterceptor) connect(ctx context.Context, w http.ResponseWriter
 	return nil
 }
 
-func (ic *connectInterceptor) respondOK(writer io.Writer, req *http.Request, respHeaders http.Header) error {
-	addIdleKeepAlive(respHeaders, ic.idleTimeout)
-	return ic.respondHijacked(writer, req, http.StatusOK, respHeaders, nil)
+func (ic *connectInterceptor) hijack(w http.ResponseWriter) (net.Conn, error) {
+	// Hijack underlying connection.
+	downstream, _, err := w.(http.Hijacker).Hijack()
+	if err != nil {
+		// If there's an error hijacking, it's because the connection has already
+		// been hijacked (a programming error). Not much we can do other than
+		// return an error.
+		fullErr := errors.New("Unable to hijack connection: %s", err)
+		log.Error(fullErr)
+		return nil, fullErr
+	}
+	return downstream, nil
 }
 
-func (ic *connectInterceptor) respondHijacked(writer io.Writer, req *http.Request, statusCode int, respHeaders http.Header, body []byte) error {
+func (ic *connectInterceptor) respondOK(writer io.Writer, req *http.Request, respHeaders http.Header) error {
+	addIdleKeepAlive(respHeaders, ic.idleTimeout)
+	err := respondHijacked(writer, req, http.StatusOK, respHeaders, nil)
+	if err != nil {
+		fullErr := errors.New("Unable to respond OK: ", err)
+		log.Error(fullErr)
+		return fullErr
+	}
+	return nil
+}
+
+func respondBadGatewayHijacked(writer io.Writer, req *http.Request, respHeaders http.Header, err error) {
+	log.Debugf("Responding BadGateway: %v", err)
+	respondHijacked(writer, req, http.StatusBadGateway, respHeaders, []byte(hidden.Clean(err.Error())))
+}
+
+func respondHijacked(writer io.Writer, req *http.Request, statusCode int, respHeaders http.Header, body []byte) error {
 	defer func() {
 		if req.Body != nil {
 			if err := req.Body.Close(); err != nil {

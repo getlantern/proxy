@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"io/ioutil"
 	"net"
 	"net/http"
@@ -54,11 +53,11 @@ func TestDialFailureHTTP(t *testing.T) {
 	assert.Equal(t, errorText, string(body))
 }
 
-func TestDialFailureCONNECT(t *testing.T) {
+func TestDialFailureCONNECTWaitForUpstream(t *testing.T) {
 	errorText := "I don't want to dial"
 	d := mockconn.FailingDialer(errors.New(errorText))
 	w := httptest.NewRecorder(nil)
-	h := CONNECT(0, nil, func(ctx context.Context, net, addr string) (net.Conn, error) {
+	h := CONNECT(0, nil, true, func(ctx context.Context, net, addr string) (net.Conn, error) {
 		return d.Dial(net, addr)
 	})
 	req, _ := http.NewRequest("CONNECT", "http://thehost:123", nil)
@@ -67,19 +66,42 @@ func TestDialFailureCONNECT(t *testing.T) {
 		return
 	}
 	assert.Equal(t, "thehost:123", d.LastDialed(), "Should have used specified port of 123")
-	resp := w.Result()
+	resp, err := http.ReadResponse(bufio.NewReader(w.Body()), req)
+	if !assert.NoError(t, err) {
+		return
+	}
 	assert.Equal(t, http.StatusBadGateway, resp.StatusCode)
 	body, err := ioutil.ReadAll(resp.Body)
 	if !assert.NoError(t, err) {
 		return
 	}
-	assert.Equal(t, fmt.Sprintf("Unable to dial upstream: %v", errorText), string(body))
+	assert.Equal(t, errorText, string(body))
+}
+
+func TestDialFailureCONNECTDontWaitForUpstream(t *testing.T) {
+	errorText := "I don't want to dial"
+	d := mockconn.FailingDialer(errors.New(errorText))
+	w := httptest.NewRecorder(nil)
+	h := CONNECT(0, nil, false, func(ctx context.Context, net, addr string) (net.Conn, error) {
+		return d.Dial(net, addr)
+	})
+	req, _ := http.NewRequest("CONNECT", "http://thehost:123", nil)
+	err := h(context.Background(), w, req)
+	if !assert.Error(t, err, "Should have gotten error") {
+		return
+	}
+	assert.Equal(t, "thehost:123", d.LastDialed(), "Should have used specified port of 123")
+	resp, err := http.ReadResponse(bufio.NewReader(w.Body()), req)
+	if !assert.NoError(t, err) {
+		return
+	}
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
 
 func TestDialWithTimeout(t *testing.T) {
 	d := mockconn.SucceedingDialer(nil)
 	w := httptest.NewRecorder(nil)
-	h := CONNECT(0, nil, func(ctx context.Context, net, addr string) (net.Conn, error) {
+	h := CONNECT(0, nil, true, func(ctx context.Context, net, addr string) (net.Conn, error) {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
@@ -88,34 +110,42 @@ func TestDialWithTimeout(t *testing.T) {
 		}
 	})
 	req, _ := http.NewRequest("CONNECT", "http://thehost:123", nil)
-	ctx, _ := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
 	err := h(ctx, w, req)
 	if !assert.Error(t, err, "Should have gotten error") {
 		return
 	}
 	assert.Equal(t, "", d.LastDialed(), "Should have not dialed")
-	resp := w.Result()
+	resp, err := http.ReadResponse(bufio.NewReader(w.Body()), req)
+	if !assert.NoError(t, err) {
+		return
+	}
 	assert.Equal(t, http.StatusBadGateway, resp.StatusCode)
 	body, err := ioutil.ReadAll(resp.Body)
 	if !assert.NoError(t, err) {
 		return
 	}
-	assert.Equal(t, "Unable to dial upstream: context deadline exceeded", string(body))
+	assert.Equal(t, "context deadline exceeded", string(body))
 }
 
-func TestCONNECT(t *testing.T) {
-	doTest(t, "CONNECT", false)
+func TestCONNECTWaitForUpstream(t *testing.T) {
+	doTest(t, "CONNECT", false, true)
+}
+
+func TestCONNECTDontWaitForUpstream(t *testing.T) {
+	doTest(t, "CONNECT", false, false)
 }
 
 func TestHTTPForwardFirst(t *testing.T) {
-	doTest(t, "GET", false)
+	doTest(t, "GET", false, false)
 }
 
 func TestHTTPDontForwardFirst(t *testing.T) {
-	doTest(t, "GET", true)
+	doTest(t, "GET", true, false)
 }
 
-func doTest(t *testing.T, requestMethod string, discardFirstRequest bool) {
+func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWaitsForUpstream bool) {
 	l, err := net.Listen("tcp", "localhost:0")
 	if !assert.NoError(t, err) {
 		return
@@ -152,7 +182,7 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool) {
 	isConnect := requestMethod == "CONNECT"
 	var intercept Interceptor
 	if isConnect {
-		intercept = CONNECT(30*time.Second, nil, dial)
+		intercept = CONNECT(30*time.Second, nil, okWaitsForUpstream, dial)
 	} else {
 		intercept = HTTP(discardFirstRequest, 30*time.Second, onRequest, nil, nil, dial)
 	}
