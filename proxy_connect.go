@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/getlantern/errors"
+	"github.com/getlantern/hidden"
 	"github.com/getlantern/idletiming"
 	"github.com/getlantern/netx"
 )
@@ -28,28 +29,15 @@ type BufferSource interface {
 //
 // bufferSource: specifies a BufferSource, leave nil to use default
 //
+// okWaitsForUpstream: specifies whether or not to wait on dialing upstream
+// before responding OK
+//
 // dial: the function that's used to dial upstream
 func CONNECT(
 	idleTimeout time.Duration,
 	bufferSource BufferSource,
+	okWaitsForUpstream bool,
 	dial DialFunc,
-) Interceptor {
-	return DO_CONNECT(idleTimeout, bufferSource, dial, false)
-}
-
-func CLIENT_CONNECT(
-	idleTimeout time.Duration,
-	bufferSource BufferSource,
-	dial DialFunc,
-) Interceptor {
-	return DO_CONNECT(idleTimeout, bufferSource, dial, true)
-}
-
-func DO_CONNECT(
-	idleTimeout time.Duration,
-	bufferSource BufferSource,
-	dial DialFunc,
-	client bool,
 ) Interceptor {
 	// Apply defaults
 	if bufferSource == nil {
@@ -57,20 +45,20 @@ func DO_CONNECT(
 	}
 
 	ic := &connectInterceptor{
-		idleTimeout:  idleTimeout,
-		bufferSource: bufferSource,
-		dial:         dial,
-		client:       client,
+		idleTimeout:        idleTimeout,
+		bufferSource:       bufferSource,
+		dial:               dial,
+		okWaitsForUpstream: okWaitsForUpstream,
 	}
 	return ic.connect
 }
 
 // interceptor configures an Interceptor.
 type connectInterceptor struct {
-	idleTimeout  time.Duration
-	bufferSource BufferSource
-	dial         DialFunc
-	client       bool
+	idleTimeout        time.Duration
+	bufferSource       BufferSource
+	dial               DialFunc
+	okWaitsForUpstream bool
 }
 
 func (ic *connectInterceptor) connect(ctx context.Context, w http.ResponseWriter, req *http.Request) error {
@@ -93,47 +81,38 @@ func (ic *connectInterceptor) connect(ctx context.Context, w http.ResponseWriter
 		}
 	}()
 
-	// We preemptively respond with an OK on the client. Chrome essentially
-	// seems to to consider an OK response as an indicator that the connection
-	// to the proxy succeeded and not the connection to the destination. We do
-	// the same, in part to avoid Chrome marking Lantern as a bad proxy. See
-	// the extensive discussion here:
-	// https://github.com/getlantern/lantern/issues/5514
+	if downstream, err = ic.hijack(w); err != nil {
+		return err
+	}
+	closeDownstream = true
+
+	if !ic.okWaitsForUpstream {
+		err = ic.respondOK(downstream, req, w.Header())
+		if err != nil {
+			return err
+		}
+	}
 
 	// Note - for CONNECT requests, we use the Host from the request URL, not the
 	// Host header. See discussion here:
 	// https://ask.wireshark.org/questions/22988/http-host-header-with-and-without-port-number
-	if ic.client {
-		if downstream, err = ic.hijack(w); err != nil {
-			return err
+	if upstream, err = ic.dial(ctx, "tcp", req.URL.Host); err != nil {
+		if ic.okWaitsForUpstream {
+			respondBadGatewayHijacked(downstream, req, w.Header(), err)
 		} else {
-			closeDownstream = true
-			if err = ic.respondOK(downstream, req, w.Header()); err != nil {
-				return err
-			} else {
-				if upstream, err = ic.dial(ctx, "tcp", req.URL.Host); err != nil {
-					return err
-				} else {
-					closeUpstream = true
-				}
-			}
+			log.Error(err)
 		}
-	} else {
-		if upstream, err = ic.dial(ctx, "tcp", req.URL.Host); err != nil {
-			respondBadGateway(w, err)
+		return err
+	}
+	closeUpstream = true
+
+	if ic.okWaitsForUpstream {
+		err = ic.respondOK(downstream, req, w.Header())
+		if err != nil {
 			return err
-		} else {
-			closeUpstream = true
-			if downstream, err = ic.hijack(w); err != nil {
-				return err
-			} else {
-				closeDownstream = true
-				if err = ic.respondOK(downstream, req, w.Header()); err != nil {
-					return err
-				}
-			}
 		}
 	}
+
 	return ic.copy(upstream, downstream)
 }
 
@@ -172,7 +151,7 @@ func (ic *connectInterceptor) hijack(w http.ResponseWriter) (net.Conn, error) {
 
 func (ic *connectInterceptor) respondOK(writer io.Writer, req *http.Request, respHeaders http.Header) error {
 	addIdleKeepAlive(respHeaders, ic.idleTimeout)
-	err := ic.respondHijacked(writer, req, http.StatusOK, respHeaders, nil)
+	err := respondHijacked(writer, req, http.StatusOK, respHeaders, nil)
 	if err != nil {
 		fullErr := errors.New("Unable to respond OK: ", err)
 		log.Error(fullErr)
@@ -181,7 +160,12 @@ func (ic *connectInterceptor) respondOK(writer io.Writer, req *http.Request, res
 	return nil
 }
 
-func (ic *connectInterceptor) respondHijacked(writer io.Writer, req *http.Request, statusCode int, respHeaders http.Header, body []byte) error {
+func respondBadGatewayHijacked(writer io.Writer, req *http.Request, respHeaders http.Header, err error) {
+	log.Debugf("Responding BadGateway: %v", err)
+	respondHijacked(writer, req, http.StatusBadGateway, respHeaders, []byte(hidden.Clean(err.Error())))
+}
+
+func respondHijacked(writer io.Writer, req *http.Request, statusCode int, respHeaders http.Header, body []byte) error {
 	defer func() {
 		if req.Body != nil {
 			if err := req.Body.Close(); err != nil {
