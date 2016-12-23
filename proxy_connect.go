@@ -87,6 +87,16 @@ func (ic *connectInterceptor) connect(ctx context.Context, w http.ResponseWriter
 	closeDownstream = true
 
 	if !ic.okWaitsForUpstream {
+		// We preemptively respond with an OK on the client. Some user agents like
+		// Chrome consider any non-200 OK response from the proxy to indicate that
+		// there's a problem with the proxy rather than the origin, causing the user
+		// agent to mark the proxy itself as bad and avoid using it in the future.
+		// By immediately responding 200 OK irrespective of what happens with the
+		// origin, we are signaling to the user agent that the proxy itself is good.
+		// If there is a subsequent problem dialing the origin, the user agent will
+		// (mostly correctly) attribute that to a problem with the origin rather
+		// than the proxy and continue to consider the proxy good. See the extensive
+		// discussion here: https://github.com/getlantern/lantern/issues/5514.
 		err = ic.respondOK(downstream, req, w.Header())
 		if err != nil {
 			return err
@@ -107,6 +117,12 @@ func (ic *connectInterceptor) connect(ctx context.Context, w http.ResponseWriter
 	closeUpstream = true
 
 	if ic.okWaitsForUpstream {
+		// In this case, we're waiting to successfully dial upstream before
+		// responding OK. Lantern uses this logic on server-side proxies so that the
+		// Lantern client retains the opportunity to fail over to a different proxy
+		// server just in case that one is able to reach the origin. This is
+		// relevant, for example, if some proxy servers reside in jurisdictions
+		// where an origin site is blocked but other proxy servers don't.
 		err = ic.respondOK(downstream, req, w.Header())
 		if err != nil {
 			return err
