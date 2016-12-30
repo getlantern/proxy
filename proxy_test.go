@@ -237,7 +237,7 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 		assert.Equal(t, "subdomain.thehost:756", body, "Should have left port alone")
 	}
 	if !discardFirstRequest {
-		assert.Contains(t, resp.Header.Get("Keep-Alive"), "timeout", "First response's headers should contain a Keep-Alive timeout")
+		assert.Regexp(t, "timeout=\\d+", resp.Header.Get("Keep-Alive"), "All HTTP responses' headers should contain a Keep-Alive timeout")
 	}
 
 	nestedReqBody := []byte("My Request")

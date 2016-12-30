@@ -25,7 +25,7 @@ type Interceptor func(ctx context.Context, w http.ResponseWriter, req *http.Requ
 func addIdleKeepAlive(header http.Header, idleTimeout time.Duration) {
 	if idleTimeout > 0 {
 		// Tell the client when we're going to time out due to idle connections
-		header.Set("Keep-Alive", fmt.Sprintf("timeout: %d", int(idleTimeout.Seconds())-2))
+		header.Set("Keep-Alive", fmt.Sprintf("timeout=%d", int(idleTimeout.Seconds())-2))
 	}
 }
 
