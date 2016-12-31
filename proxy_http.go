@@ -2,7 +2,6 @@ package proxy
 
 import (
 	"bufio"
-	"context"
 	"io"
 	"io/ioutil"
 	"net"
@@ -78,14 +77,12 @@ type httpInterceptor struct {
 	dial                DialFunc
 }
 
-func (ic *httpInterceptor) intercept(ctx context.Context, w http.ResponseWriter, req *http.Request) error {
+func (ic *httpInterceptor) intercept(w http.ResponseWriter, req *http.Request) error {
 	var downstream net.Conn
 	var downstreamBuffered *bufio.ReadWriter
 	tr := &http.Transport{
-		// Note: set Dial instead of DialContext here as we want to cancel with
-		// the ctx passed in, instead of the context with the request.
 		Dial: func(net, addr string) (net.Conn, error) {
-			return ic.dial(ctx, net, addr)
+			return ic.dial(net, addr)
 		},
 		IdleConnTimeout: ic.idleTimeout,
 		// since we have one transport per downstream connection, we don't need
