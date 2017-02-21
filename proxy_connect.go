@@ -12,6 +12,7 @@ import (
 	"github.com/getlantern/errors"
 	"github.com/getlantern/hidden"
 	"github.com/getlantern/idletiming"
+	"github.com/getlantern/lampshade"
 	"github.com/getlantern/netx"
 )
 
@@ -207,8 +208,8 @@ func respondHijacked(writer io.Writer, req *http.Request, statusCode int, respHe
 type defaultBufferSource struct{}
 
 func (dbs *defaultBufferSource) Get() []byte {
-	// We use the same default buffer size as io.Copy.
-	return make([]byte, 32768)
+	// We limit ourselves to lampshade.MaxDataLen to ensure compatibility with it
+	return make([]byte, lampshade.MaxDataLen)
 }
 
 func (dbs *defaultBufferSource) Put(buf []byte) {
