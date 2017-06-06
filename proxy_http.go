@@ -174,7 +174,13 @@ func (ic *httpInterceptor) writeResponse(downstream io.Writer, resp *http.Respon
 	} else {
 		resp = ic.onResponse(prepareResponse(resp, belowHTTP11))
 	}
-	return resp.Write(out)
+	err := resp.Write(out)
+	// resp.Write closes the body only if it's successfully sent. Close
+	// manually when error happens.
+	if err != nil && resp.Body != nil {
+		resp.Body.Close()
+	}
+	return err
 }
 
 // prepareRequest prepares the request in line with the HTTP spec for proxies.

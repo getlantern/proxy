@@ -124,7 +124,7 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 	if !assert.NoError(t, err) {
 		return
 	}
-	defer l.Close()
+	defer pl.Close()
 
 	var mx sync.RWMutex
 	seenAddresses := make(map[string]bool)
