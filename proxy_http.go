@@ -118,14 +118,15 @@ func (ic *httpInterceptor) processRequests(remoteAddr string, req *http.Request,
 
 	first := true
 	for {
+		ic.onRequest(req)
 		discardRequest := first && ic.discardFirstRequest
 		if discardRequest {
-			err := ic.onRequest(req).Write(ioutil.Discard)
+			err := req.Write(ioutil.Discard)
 			if err != nil {
 				return errors.New("Error discarding first request: %v", err)
 			}
 		} else {
-			resp, err := tr.RoundTrip(prepareRequest(ic.onRequest(req)))
+			resp, err := tr.RoundTrip(prepareRequest(req))
 			if err != nil {
 				errResp := ic.onError(req, err)
 				if errResp != nil {
