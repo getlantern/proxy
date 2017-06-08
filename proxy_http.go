@@ -118,14 +118,15 @@ func (ic *httpInterceptor) processRequests(remoteAddr string, req *http.Request,
 
 	first := true
 	for {
+		modifiedReq := ic.onRequest(req)
 		discardRequest := first && ic.discardFirstRequest
 		if discardRequest {
-			err := ic.onRequest(req).Write(ioutil.Discard)
+			err := modifiedReq.Write(ioutil.Discard)
 			if err != nil {
 				return errors.New("Error discarding first request: %v", err)
 			}
 		} else {
-			resp, err := tr.RoundTrip(prepareRequest(ic.onRequest(req)))
+			resp, err := tr.RoundTrip(prepareRequest(modifiedReq))
 			if err != nil {
 				errResp := ic.onError(req, err)
 				if errResp != nil {
@@ -174,7 +175,13 @@ func (ic *httpInterceptor) writeResponse(downstream io.Writer, resp *http.Respon
 	} else {
 		resp = ic.onResponse(prepareResponse(resp, belowHTTP11))
 	}
-	return resp.Write(out)
+	err := resp.Write(out)
+	// resp.Write closes the body only if it's successfully sent. Close
+	// manually when error happens.
+	if err != nil && resp.Body != nil {
+		resp.Body.Close()
+	}
+	return err
 }
 
 // prepareRequest prepares the request in line with the HTTP spec for proxies.

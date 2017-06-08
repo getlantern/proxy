@@ -4,9 +4,11 @@ import (
 	"bufio"
 	"bytes"
 	"errors"
+	"fmt"
 	"io/ioutil"
 	"net"
 	"net/http"
+	ht "net/http/httptest"
 	"sync"
 	"testing"
 	"time"
@@ -113,6 +115,81 @@ func TestHTTPDontForwardFirst(t *testing.T) {
 	doTest(t, "GET", true, false)
 }
 
+type failingConn struct {
+	net.Conn
+}
+
+func (c failingConn) Write(b []byte) (n int, err error) {
+	return 0, fmt.Errorf("fail intentionally: %s->%s",
+		c.Conn.LocalAddr().String(),
+		c.Conn.RemoteAddr().String())
+}
+
+type failingHijacker struct {
+	http.ResponseWriter
+}
+
+func (h failingHijacker) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	n, rw, e := h.ResponseWriter.(http.Hijacker).Hijack()
+	return failingConn{n}, rw, e
+}
+
+func TestHTTPDownstreamError(t *testing.T) {
+	origin := ht.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Write([]byte("hello"))
+	}))
+	defer origin.Close()
+
+	intercept := HTTP(false, 30*time.Second, nil, nil, nil, func(network, addr string) (net.Conn, error) {
+		return net.Dial("tcp", origin.Listener.Addr().String())
+	})
+	proxy := ht.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		intercept(failingHijacker{w}, req)
+	}))
+	defer proxy.Close()
+
+	_, counter, err := fdcount.Matching("TCP")
+	if !assert.NoError(t, err) {
+		return
+	}
+
+	n := 100
+	var wg sync.WaitGroup
+	wg.Add(n)
+	chConnsToClose := make(chan net.Conn, n)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			conn, err := net.Dial("tcp", proxy.Listener.Addr().String())
+			chConnsToClose <- conn
+			if !assert.NoError(t, err) {
+				return
+			}
+
+			req, _ := http.NewRequest("GET", origin.URL, nil)
+			err = req.Write(conn)
+			if !assert.NoError(t, err) {
+				return
+			}
+			br := bufio.NewReader(conn)
+			_, rtErr := http.ReadResponse(br, req)
+			if !assert.Error(t, rtErr) {
+				return
+			}
+		}()
+	}
+
+	wg.Wait()
+	assert.NoError(t, counter.AssertDelta(n),
+		"All connections should have been closed but the CLOSE_WAIT one from client to proxy")
+	for i := 0; i < n; i++ {
+		if conn := <-chConnsToClose; conn != nil {
+			conn.Close()
+		}
+	}
+	assert.NoError(t, counter.AssertDelta(0), "All connections should have been closed")
+}
+
 func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWaitsForUpstream bool) {
 	l, err := net.Listen("tcp", "localhost:0")
 	if !assert.NoError(t, err) {
@@ -124,7 +201,7 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 	if !assert.NoError(t, err) {
 		return
 	}
-	defer l.Close()
+	defer pl.Close()
 
 	var mx sync.RWMutex
 	seenAddresses := make(map[string]bool)
