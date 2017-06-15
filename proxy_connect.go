@@ -32,6 +32,10 @@ type BufferSource interface {
 // MITMOpts allows the specification of options to enable man-in-the-middling.
 type MITMOpts struct {
 	mitm.Opts
+	// MITMDomains: optionally specifies which domains to MITM (domains are
+	// matched exactly, not by subdomain). If not specified, all domains are
+	// MITM'ed.
+	MITMDomains []string
 	// OnRequest corresponds to the setting for HTTP()
 	OnRequest func(req *http.Request) *http.Request
 	// OnResponse corresponds to the setting for HTTP()
@@ -77,6 +81,12 @@ func CONNECT(
 
 	var mitmErr error
 	if mitmOpts != nil {
+		if len(mitmOpts.MITMDomains) > 0 {
+			ic.mitmWhitelist = make(map[string]bool, len(mitmOpts.MITMDomains))
+			for _, domain := range mitmOpts.MITMDomains {
+				ic.mitmWhitelist[strings.ToLower(domain)] = true
+			}
+		}
 		ic.mitmIC, mitmErr = mitm.Configure(&mitmOpts.Opts)
 		if mitmErr != nil {
 			mitmErr = errors.New("Unable to configure MITM: %v", mitmErr)
@@ -92,6 +102,7 @@ func CONNECT(
 type connectInterceptor struct {
 	idleTimeout        time.Duration
 	bufferSource       BufferSource
+	mitmWhitelist      map[string]bool
 	mitmIC             *mitm.Interceptor
 	httpIC             *httpInterceptor
 	dial               DialFunc
@@ -197,6 +208,17 @@ func (ic *connectInterceptor) copy(w http.ResponseWriter, req *http.Request, ups
 func (ic *connectInterceptor) mitmIfNecessary(w http.ResponseWriter, req *http.Request, upstream, downstream net.Conn, bufOut []byte) (bool, error) {
 	if ic.mitmIC == nil {
 		return false, nil
+	}
+
+	if ic.mitmWhitelist != nil {
+		host, _, err := net.SplitHostPort(req.URL.Host)
+		if err != nil {
+			host = req.URL.Host
+		}
+		okayToMITM := ic.mitmWhitelist[strings.ToLower(host)]
+		if !okayToMITM {
+			return false, nil
+		}
 	}
 
 	// Try to MITM the connection
