@@ -3,25 +3,38 @@ package proxy
 import (
 	"bufio"
 	"bytes"
+	// "crypto/tls"
 	"errors"
 	"fmt"
 	"io/ioutil"
 	"net"
 	"net/http"
 	ht "net/http/httptest"
+	"os"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/getlantern/fdcount"
 	"github.com/getlantern/httptest"
+	// "github.com/getlantern/keyman"
+	// "github.com/getlantern/mitm"
 	"github.com/getlantern/mockconn"
+	// "github.com/getlantern/tlsdefaults"
 	"github.com/stretchr/testify/assert"
 )
 
 const (
 	okHeader = "X-Test-OK"
 )
+
+func init() {
+	// Clean up certs
+	os.Remove("serverpk.pem")
+	os.Remove("servercert.pem")
+	os.Remove("proxypk.pem")
+	os.Remove("proxycert.pem")
+}
 
 func TestDialFailureHTTP(t *testing.T) {
 	errorText := "I don't want to dial"
@@ -58,9 +71,12 @@ func TestDialFailureCONNECTWaitForUpstream(t *testing.T) {
 	errorText := "I don't want to dial"
 	d := mockconn.FailingDialer(errors.New(errorText))
 	w := httptest.NewRecorder(nil)
-	h := CONNECT(0, nil, true, func(net, addr string) (net.Conn, error) {
+	h, buildErr := CONNECT(0, nil, true, nil, func(net, addr string) (net.Conn, error) {
 		return d.Dial(net, addr)
 	})
+	if !assert.NoError(t, buildErr) {
+		return
+	}
 	req, _ := http.NewRequest("CONNECT", "http://thehost:123", nil)
 	err := h(w, req)
 	if !assert.Error(t, err, "Should have gotten error") {
@@ -83,9 +99,12 @@ func TestDialFailureCONNECTDontWaitForUpstream(t *testing.T) {
 	errorText := "I don't want to dial"
 	d := mockconn.FailingDialer(errors.New(errorText))
 	w := httptest.NewRecorder(nil)
-	h := CONNECT(0, nil, false, func(net, addr string) (net.Conn, error) {
+	h, buildErr := CONNECT(0, nil, false, nil, func(net, addr string) (net.Conn, error) {
 		return d.Dial(net, addr)
 	})
+	if !assert.NoError(t, buildErr) {
+		return
+	}
 	req, _ := http.NewRequest("CONNECT", "http://thehost:123", nil)
 	err := h(w, req)
 	if !assert.Error(t, err, "Should have gotten error") {
@@ -100,19 +119,23 @@ func TestDialFailureCONNECTDontWaitForUpstream(t *testing.T) {
 }
 
 func TestCONNECTWaitForUpstream(t *testing.T) {
-	doTest(t, "CONNECT", false, true)
+	doTest(t, http.MethodConnect, false, true, false)
+}
+
+func TestCONNECTMITMWaitForUpstream(t *testing.T) {
+	doTest(t, http.MethodConnect, false, true, true)
 }
 
 func TestCONNECTDontWaitForUpstream(t *testing.T) {
-	doTest(t, "CONNECT", false, false)
+	doTest(t, http.MethodConnect, false, false, false)
 }
 
 func TestHTTPForwardFirst(t *testing.T) {
-	doTest(t, "GET", false, false)
+	doTest(t, http.MethodGet, false, false, false)
 }
 
 func TestHTTPDontForwardFirst(t *testing.T) {
-	doTest(t, "GET", true, false)
+	doTest(t, http.MethodGet, true, false, false)
 }
 
 type failingConn struct {
@@ -190,7 +213,7 @@ func TestHTTPDownstreamError(t *testing.T) {
 	assert.NoError(t, counter.AssertDelta(0), "All connections should have been closed")
 }
 
-func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWaitsForUpstream bool) {
+func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWaitsForUpstream bool, shouldMITM bool) {
 	l, err := net.Listen("tcp", "localhost:0")
 	if !assert.NoError(t, err) {
 		return
@@ -227,7 +250,11 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 	isConnect := requestMethod == "CONNECT"
 	var intercept Interceptor
 	if isConnect {
-		intercept = CONNECT(30*time.Second, nil, okWaitsForUpstream, dial)
+		var buildErr error
+		intercept, buildErr = CONNECT(30*time.Second, nil, okWaitsForUpstream, nil, dial)
+		if !assert.NoError(t, buildErr) {
+			return
+		}
 	} else {
 		intercept = HTTP(discardFirstRequest, 30*time.Second, onRequest, nil, nil, dial)
 	}

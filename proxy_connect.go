@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bufio"
 	"bytes"
 	"io"
 	"io/ioutil"
@@ -13,13 +14,30 @@ import (
 	"github.com/getlantern/hidden"
 	"github.com/getlantern/idletiming"
 	"github.com/getlantern/lampshade"
+	"github.com/getlantern/mitm"
 	"github.com/getlantern/netx"
+	"github.com/getlantern/reconn"
+)
+
+const (
+	maxHTTPSize = 2 << 15 // 65K
 )
 
 // BufferSource is a source for buffers used in reading/writing.
 type BufferSource interface {
 	Get() []byte
 	Put(buf []byte)
+}
+
+// MITMOpts allows the specification of options to enable man-in-the-middling.
+type MITMOpts struct {
+	mitm.Opts
+	// OnRequest corresponds to the setting for HTTP()
+	OnRequest func(req *http.Request) *http.Request
+	// OnResponse corresponds to the setting for HTTP()
+	OnResponse func(resp *http.Response) *http.Response
+	// OnError corresponds to the setting for HTTP()
+	OnError func(req *http.Request, err error) *http.Response
 }
 
 // CONNECT returns a Handler that processes CONNECT requests.
@@ -32,13 +50,19 @@ type BufferSource interface {
 // okWaitsForUpstream: specifies whether or not to wait on dialing upstream
 // before responding OK
 //
+// mitmOpts: if specified, proxy will attempt to man-in-the-middle connections
+// and handle them as an HTTP proxy. If the connection cannot be mitm'ed (e.g.
+// Client Hello doesn't include an SNI header) or if the contents isn't HTTP,
+// the connection is handled as normal without MITM.
+//
 // dial: the function that's used to dial upstream
 func CONNECT(
 	idleTimeout time.Duration,
 	bufferSource BufferSource,
 	okWaitsForUpstream bool,
+	mitmOpts *MITMOpts,
 	dial DialFunc,
-) Interceptor {
+) (Interceptor, error) {
 	// Apply defaults
 	if bufferSource == nil {
 		bufferSource = &defaultBufferSource{}
@@ -50,13 +74,26 @@ func CONNECT(
 		dial:               dial,
 		okWaitsForUpstream: okWaitsForUpstream,
 	}
-	return ic.connect
+
+	var mitmErr error
+	if mitmOpts != nil {
+		ic.mitmIC, mitmErr = mitm.Configure(&mitmOpts.Opts)
+		if mitmErr != nil {
+			mitmErr = errors.New("Unable to configure MITM: %v", mitmErr)
+		} else {
+			ic.httpIC = buildHTTP(false, idleTimeout, mitmOpts.OnRequest, mitmOpts.OnResponse, mitmOpts.OnError, dial)
+		}
+	}
+
+	return ic.connect, mitmErr
 }
 
 // interceptor configures an Interceptor.
 type connectInterceptor struct {
 	idleTimeout        time.Duration
 	bufferSource       BufferSource
+	mitmIC             *mitm.Interceptor
+	httpIC             *httpInterceptor
 	dial               DialFunc
 	okWaitsForUpstream bool
 }
@@ -71,12 +108,12 @@ func (ic *connectInterceptor) connect(w http.ResponseWriter, req *http.Request) 
 	defer func() {
 		if closeDownstream {
 			if closeErr := downstream.Close(); closeErr != nil {
-				log.Tracef("Error closing downstream connection: %s", closeErr)
+				log.Tracef("Error closing downstream connection: %v", closeErr)
 			}
 		}
 		if closeUpstream {
 			if closeErr := upstream.Close(); closeErr != nil {
-				log.Tracef("Error closing upstream connection: %s", closeErr)
+				log.Tracef("Error closing upstream connection: %v", closeErr)
 			}
 		}
 	}()
@@ -129,15 +166,21 @@ func (ic *connectInterceptor) connect(w http.ResponseWriter, req *http.Request) 
 		}
 	}
 
-	return ic.copy(upstream, downstream)
+	return ic.copy(w, req, upstream, downstream)
 }
 
-func (ic *connectInterceptor) copy(upstream, downstream net.Conn) error {
-	// Pipe data between the client and the proxy.
+func (ic *connectInterceptor) copy(w http.ResponseWriter, req *http.Request, upstream, downstream net.Conn) error {
+	// Get buffers in preparation for piping data
 	bufOut := ic.bufferSource.Get()
 	bufIn := ic.bufferSource.Get()
 	defer ic.bufferSource.Put(bufOut)
 	defer ic.bufferSource.Put(bufIn)
+
+	mitming, mitmErr := ic.mitmIfNecessary(w, req, upstream, downstream, bufOut)
+	if mitming {
+		return mitmErr
+	}
+
 	writeErr, readErr := netx.BidiCopy(upstream, downstream, bufOut, bufIn)
 	// Note - we ignore idled errors because these are okay per the HTTP spec.
 	// See https://www.w3.org/Protocols/rfc2616/rfc2616-sec8.html#sec8.1.4
@@ -151,6 +194,58 @@ func (ic *connectInterceptor) copy(upstream, downstream net.Conn) error {
 	return nil
 }
 
+func (ic *connectInterceptor) mitmIfNecessary(w http.ResponseWriter, req *http.Request, upstream, downstream net.Conn, bufOut []byte) (bool, error) {
+	if ic.mitmIC == nil {
+		return false, nil
+	}
+
+	// Try to MITM the connection
+	downstreamMITM, upstreamMITM, mitming, err := ic.mitmIC.MITM(downstream, upstream)
+	if err != nil {
+		log.Debugf("Unable to MITM %v: %v", req.URL.Host, err)
+		fullErr := errors.New("Unable to MITM connection: %v", err)
+		respondBadGatewayHijacked(downstream, req, w.Header(), fullErr)
+		return true, fullErr
+	}
+	downstream = downstreamMITM
+	upstream = upstreamMITM
+
+	if !mitming {
+		return false, nil
+	}
+
+	// Try to read HTTP request and process as HTTP
+	// assume that requests (not including body) are always smaller than 65K. If
+	// this assumption is violated, we won't be able to process the data on this
+	// connection.
+	downstreamRR := reconn.Wrap(downstream, maxHTTPSize)
+	downstreamRRBuf := bufio.NewReadWriter(bufio.NewReader(downstreamRR), bufio.NewWriter(downstreamRR))
+	firstReq, firstReqErr := http.ReadRequest(downstreamRRBuf.Reader)
+	if firstReqErr == nil {
+		upstreamBuf := bufio.NewReader(upstream)
+		// Handle as HTTP
+		return true, ic.httpIC.processRequests(downstream.RemoteAddr().String(), firstReq, downstreamRR, downstreamRRBuf, func(req *http.Request) (*http.Response, error) {
+			writeErr := req.Write(upstream)
+			if writeErr != nil {
+				return nil, writeErr
+			}
+			return http.ReadResponse(upstreamBuf, req)
+		})
+	}
+	// We couldn't read the first HTTP Request, fall back to piping data
+	rr, rrErr := downstreamRR.Rereader()
+	if rrErr != nil {
+		// Reading request overflowed, abort
+		return true, errors.New("Unable to fall back to piping data: %v", rrErr)
+	}
+	// Copy already read data to upstream before we start piping as usual
+	_, copyErr := io.CopyBuffer(upstream, rr, bufOut)
+	if copyErr != nil {
+		return true, errors.New("Error copying initial data to upstream: %v", copyErr)
+	}
+	return true, nil
+}
+
 func (ic *connectInterceptor) hijack(w http.ResponseWriter) (net.Conn, error) {
 	// Hijack underlying connection.
 	downstream, _, err := w.(http.Hijacker).Hijack()
@@ -158,7 +253,7 @@ func (ic *connectInterceptor) hijack(w http.ResponseWriter) (net.Conn, error) {
 		// If there's an error hijacking, it's because the connection has already
 		// been hijacked (a programming error). Not much we can do other than
 		// return an error.
-		fullErr := errors.New("Unable to hijack connection: %s", err)
+		fullErr := errors.New("Unable to hijack connection: %v", err)
 		log.Error(fullErr)
 		return nil, fullErr
 	}
@@ -185,7 +280,7 @@ func respondHijacked(writer io.Writer, req *http.Request, statusCode int, respHe
 	defer func() {
 		if req.Body != nil {
 			if err := req.Body.Close(); err != nil {
-				log.Debugf("Error closing body of request: %s", err)
+				log.Debugf("Error closing body of request: %v", err)
 			}
 		}
 	}()
