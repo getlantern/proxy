@@ -46,7 +46,7 @@ func TestDialFailureHTTP(t *testing.T) {
 			Body:       ioutil.NopCloser(bytes.NewReader([]byte(err.Error()))),
 		}
 	}
-	h := HTTP(false, 0, nil, nil, onError, func(net, addr string) (net.Conn, error) {
+	h := HTTP(false, 0, nil, nil, nil, onError, func(net, addr string) (net.Conn, error) {
 		return d.Dial(net, addr)
 	})
 	req, _ := http.NewRequest("GET", "http://thehost:123", nil)
@@ -119,23 +119,39 @@ func TestDialFailureCONNECTDontWaitForUpstream(t *testing.T) {
 }
 
 func TestCONNECTWaitForUpstream(t *testing.T) {
-	doTest(t, http.MethodConnect, false, true, false)
+	doTest(t, http.MethodConnect, false, false, true, false)
 }
 
 func TestCONNECTMITMWaitForUpstream(t *testing.T) {
-	doTest(t, http.MethodConnect, false, true, true)
+	doTest(t, http.MethodConnect, false, false, true, true)
 }
 
 func TestCONNECTDontWaitForUpstream(t *testing.T) {
-	doTest(t, http.MethodConnect, false, false, false)
+	doTest(t, http.MethodConnect, false, false, false, false)
 }
 
 func TestHTTPForwardFirst(t *testing.T) {
-	doTest(t, http.MethodGet, false, false, false)
+	doTest(t, http.MethodGet, false, false, false, false)
 }
 
 func TestHTTPDontForwardFirst(t *testing.T) {
-	doTest(t, http.MethodGet, true, false, false)
+	doTest(t, http.MethodGet, true, false, false, false)
+}
+
+func TestHTTPForwardFirstShortCircuit(t *testing.T) {
+	doTest(t, http.MethodGet, false, true, false, false)
+}
+
+func TestHTTPDontForwardFirstShortCircuit(t *testing.T) {
+	doTest(t, http.MethodGet, true, true, false, false)
+}
+
+func TestCONNECTMITMForwardFirstShortCircuit(t *testing.T) {
+	doTest(t, http.MethodConnect, false, true, true, true)
+}
+
+func TestCONNECTMITMDontForwardFirstShortCircuit(t *testing.T) {
+	doTest(t, http.MethodConnect, true, true, true, true)
 }
 
 type failingConn struct {
@@ -163,7 +179,7 @@ func TestHTTPDownstreamError(t *testing.T) {
 	}))
 	defer origin.Close()
 
-	intercept := HTTP(false, 30*time.Second, nil, nil, nil, func(network, addr string) (net.Conn, error) {
+	intercept := HTTP(false, 30*time.Second, nil, nil, nil, nil, func(network, addr string) (net.Conn, error) {
 		return net.Dial("tcp", origin.Listener.Addr().String())
 	})
 	proxy := ht.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -213,7 +229,7 @@ func TestHTTPDownstreamError(t *testing.T) {
 	assert.NoError(t, counter.AssertDelta(0), "All connections should have been closed")
 }
 
-func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWaitsForUpstream bool, shouldMITM bool) {
+func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, shouldShortCircuit bool, okWaitsForUpstream bool, shouldMITM bool) {
 	l, err := tlsdefaults.Listen("localhost:0", "serverpk.pem", "servercert.pem")
 	if !assert.NoError(t, err) {
 		return
@@ -258,6 +274,19 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 		return req
 	}
 
+	shortCircuit := func(req *http.Request) *http.Response {
+		if shouldShortCircuit {
+			return &http.Response{
+				StatusCode: http.StatusForbidden,
+				Proto:      req.Proto,
+				ProtoMajor: req.ProtoMajor,
+				ProtoMinor: req.ProtoMinor,
+				Close:      !req.ProtoAtLeast(1, 1),
+			}
+		}
+		return nil
+	}
+
 	isConnect := requestMethod == "CONNECT"
 	var intercept Interceptor
 	if isConnect {
@@ -271,7 +300,8 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 						RootCAs: serverCert.PoolContainingCert(),
 					},
 				},
-				OnRequest: onRequest,
+				OnRequest:    onRequest,
+				ShortCircuit: shortCircuit,
 			}
 		}
 		intercept, err = CONNECT(30*time.Second, nil, okWaitsForUpstream, mitmOpts, dial)
@@ -279,7 +309,7 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 			return
 		}
 	} else {
-		intercept = HTTP(discardFirstRequest, 30*time.Second, onRequest, nil, nil, dial)
+		intercept = HTTP(discardFirstRequest, 30*time.Second, onRequest, shortCircuit, nil, nil, dial)
 	}
 
 	go http.Serve(pl, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -304,16 +334,17 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 	roundTrip := func(req *http.Request, readResponse bool) (*http.Response, string, error) {
 		rtErr := req.Write(conn)
 		if rtErr != nil {
-			return nil, "", rtErr
+			return nil, "", fmt.Errorf("Unable to write request: %v", rtErr)
 		}
 		if readResponse {
 			resp, rtErr := http.ReadResponse(br, req)
 			if rtErr != nil {
-				return nil, "", rtErr
+				return nil, "", fmt.Errorf("Unable to read response: %v", rtErr)
 			}
+			defer resp.Body.Close()
 			body, rtErr := ioutil.ReadAll(resp.Body)
 			if rtErr != nil {
-				return resp, "", rtErr
+				return resp, "", fmt.Errorf("Unable to read response body: %v", rtErr)
 			}
 			return resp, string(body), nil
 		}
@@ -328,7 +359,7 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 	if !assert.NoError(t, err) {
 		return
 	}
-	if !isConnect && !discardFirstRequest {
+	if !isConnect && !discardFirstRequest && !shouldShortCircuit {
 		assert.Equal(t, "subdomain.thehost:756", body, "Should have left port alone")
 	}
 	if !discardFirstRequest {
@@ -360,24 +391,35 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 
 	nestedReqBody := []byte("My Request")
 	nestedReq, _ := http.NewRequest("POST", "http://subdomain2.thehost/a", ioutil.NopCloser(bytes.NewBuffer(nestedReqBody)))
-	nestedReq.Proto = "HTTP/1.1"
+	nestedReq.ProtoMajor = 1
+	nestedReq.ProtoMinor = 1
 	resp, body, err = roundTrip(nestedReq, true)
 	if !assert.NoError(t, err) {
 		return
 	}
-	assert.Equal(t, "subdomain2.thehost", body, "Should have gotten right host")
+	if shouldShortCircuit {
+		assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+	} else {
+		assert.Equal(t, "subdomain2.thehost", body, "Should have gotten right host")
+	}
 	if !isConnect {
 		assert.Contains(t, resp.Header.Get("Keep-Alive"), "timeout", "All HTTP responses' headers should contain a Keep-Alive timeout")
 	}
 
 	nestedReq2Body := []byte("My Request")
 	nestedReq2, _ := http.NewRequest("POST", "http://subdomain3.thehost/b", ioutil.NopCloser(bytes.NewBuffer(nestedReq2Body)))
-	nestedReq2.Proto = "HTTP/1.0"
+	nestedReq2.ProtoMajor = 1
+	nestedReq2.ProtoMinor = 0
+	nestedReq2.ContentLength = int64(len(nestedReq2Body))
 	resp, body, err = roundTrip(nestedReq2, true)
 	if !assert.NoError(t, err) {
 		return
 	}
-	assert.Equal(t, "subdomain3.thehost", body, "Should have gotten right host")
+	if shouldShortCircuit {
+		assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+	} else {
+		assert.Equal(t, "subdomain3.thehost", body, "Should have gotten right host")
+	}
 	if !isConnect {
 		assert.Contains(t, resp.Header.Get("Keep-Alive"), "timeout", "All HTTP responses' headers should contain a Keep-Alive timeout")
 	}
@@ -388,6 +430,9 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 	}
 	if isConnect {
 		expectedConnections = 1
+	}
+	if shouldShortCircuit {
+		expectedConnections = 0
 	}
 	mx.RLock()
 	defer mx.RUnlock()

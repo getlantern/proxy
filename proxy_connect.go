@@ -38,6 +38,8 @@ type MITMOpts struct {
 	MITMDomains []string
 	// OnRequest corresponds to the setting for HTTP()
 	OnRequest func(req *http.Request) *http.Request
+	// ShortCircuit corresponds to the setting for HTTP()
+	ShortCircuit func(req *http.Request) *http.Response
 	// OnResponse corresponds to the setting for HTTP()
 	OnResponse func(resp *http.Response) *http.Response
 	// OnError corresponds to the setting for HTTP()
@@ -91,7 +93,7 @@ func CONNECT(
 		if mitmErr != nil {
 			mitmErr = errors.New("Unable to configure MITM: %v", mitmErr)
 		} else {
-			ic.httpIC = buildHTTP(false, idleTimeout, mitmOpts.OnRequest, mitmOpts.OnResponse, mitmOpts.OnError, dial)
+			ic.httpIC = buildHTTP(false, idleTimeout, mitmOpts.OnRequest, mitmOpts.ShortCircuit, mitmOpts.OnResponse, mitmOpts.OnError, dial)
 		}
 	}
 

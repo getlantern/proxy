@@ -16,35 +16,41 @@ import (
 // HTTP returns a Handler that processes plain-text HTTP requests.
 //
 // discardFirstRequest: if true, causes the first request to the handler to be
-// discarded
+//                      discarded
 //
 // idleTimeout: if specified, lets us know to include an appropriate
-// KeepAlive: timeout header in the HTTP response
+//              KeepAlive: timeout header in the HTTP response
 //
 // onRequest: if specified, is called on every read request
+//
+// shortCircuit: if specified, is called on every non-ignored request. If this
+//               function returns a response, the request is not sent upstream
+//               and the response is returned immediately.
 //
 // onResponse: if specified, is called on every read response
 //
 // onError: if specified, if there's an error making a round trip, this function
-// can return a response to be presented to the client. If the function returns
-// no response, nothing is written to the client.
+//          can return a response to be presented to the client. If the function
+//          returns no response, nothing is written to the client.
 //
 // dial: the function that's used to dial upstream
 func HTTP(
 	discardFirstRequest bool,
 	idleTimeout time.Duration,
 	onRequest func(req *http.Request) *http.Request,
+	shortCircuit func(req *http.Request) *http.Response,
 	onResponse func(resp *http.Response) *http.Response,
 	onError func(req *http.Request, err error) *http.Response,
 	dial DialFunc,
 ) Interceptor {
-	return buildHTTP(discardFirstRequest, idleTimeout, onRequest, onResponse, onError, dial).intercept
+	return buildHTTP(discardFirstRequest, idleTimeout, onRequest, shortCircuit, onResponse, onError, dial).intercept
 }
 
 func buildHTTP(
 	discardFirstRequest bool,
 	idleTimeout time.Duration,
 	onRequest func(req *http.Request) *http.Request,
+	shortCircuit func(req *http.Request) *http.Response,
 	onResponse func(resp *http.Response) *http.Response,
 	onError func(req *http.Request, err error) *http.Response,
 	dial DialFunc,
@@ -52,6 +58,9 @@ func buildHTTP(
 	// Apply defaults
 	if onRequest == nil {
 		onRequest = defaultOnRequest
+	}
+	if shortCircuit == nil {
+		shortCircuit = defaultShortCircuit
 	}
 	if onResponse == nil {
 		onResponse = defaultOnResponse
@@ -72,6 +81,7 @@ func buildHTTP(
 		discardFirstRequest: discardFirstRequest,
 		idleTimeout:         idleTimeout,
 		onRequest:           onRequest,
+		shortCircuit:        shortCircuit,
 		onResponse:          onResponse,
 		onError:             onError,
 		dial:                dial,
@@ -82,6 +92,7 @@ type httpInterceptor struct {
 	discardFirstRequest bool
 	idleTimeout         time.Duration
 	onRequest           func(req *http.Request) *http.Request
+	shortCircuit        func(req *http.Request) *http.Response
 	onResponse          func(resp *http.Response) *http.Response
 	onError             func(req *http.Request, err error) *http.Response
 	dial                DialFunc
@@ -139,14 +150,25 @@ func (ic *httpInterceptor) processRequests(remoteAddr string, req *http.Request,
 				return errors.New("Error discarding first request: %v", err)
 			}
 		} else {
-			resp, err := roundTrip(prepareRequest(modifiedReq))
-			if err != nil {
-				errResp := ic.onError(req, err)
-				if errResp != nil {
-					errResp.Request = req
-					ic.writeResponse(downstream, errResp)
+			resp := ic.shortCircuit(modifiedReq)
+			shortCircuited := resp != nil
+			if shortCircuited {
+				resp.Request = modifiedReq
+				// consume and close request body if it hasn't been already
+				io.Copy(ioutil.Discard, req.Body)
+				req.Body.Close()
+			} else {
+				// actually round-trip the request
+				var err error
+				resp, err = roundTrip(prepareRequest(modifiedReq))
+				if err != nil {
+					errResp := ic.onError(req, err)
+					if errResp != nil {
+						errResp.Request = req
+						ic.writeResponse(downstream, errResp)
+					}
+					return err
 				}
-				return err
 			}
 			writeErr := ic.writeResponse(downstream, resp)
 			if writeErr != nil {
@@ -306,6 +328,10 @@ func isUnexpected(err error) bool {
 
 func defaultOnRequest(req *http.Request) *http.Request {
 	return req
+}
+
+func defaultShortCircuit(req *http.Request) *http.Response {
+	return nil
 }
 
 func defaultOnResponse(resp *http.Response) *http.Response {
