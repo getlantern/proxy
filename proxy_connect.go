@@ -82,7 +82,7 @@ func (proxy *proxy) handleCONNECT(downstream net.Conn, req *http.Request) error 
 	// Note - for CONNECT requests, we use the Host from the request URL, not the
 	// Host header. See discussion here:
 	// https://ask.wireshark.org/questions/22988/http-host-header-with-and-without-port-number
-	if upstream, err = proxy.Dial("tcp", req.URL.Host); err != nil {
+	if upstream, err = proxy.Dial(true, "tcp", req.URL.Host); err != nil {
 		if proxy.OKWaitsForUpstream {
 			respondBadGateway(downstream, modifiedReq, err)
 		} else {

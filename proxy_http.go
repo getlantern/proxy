@@ -72,7 +72,7 @@ func (proxy *proxy) Handle(downstream net.Conn) error {
 func (proxy *proxy) handleHTTP(downstream net.Conn, downstreamBuffered *bufio.Reader, req *http.Request) error {
 	tr := &http.Transport{
 		Dial: func(net, addr string) (net.Conn, error) {
-			return proxy.Dial(net, addr)
+			return proxy.Dial(false, net, addr)
 		},
 		IdleConnTimeout: proxy.IdleTimeout,
 		// since we have one transport per downstream connection, we don't need

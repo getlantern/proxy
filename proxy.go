@@ -18,7 +18,7 @@ var (
 )
 
 // DialFunc is the dial function to use for dialing the proxy.
-type DialFunc func(network, addr string) (conn net.Conn, err error)
+type DialFunc func(isCONNECT bool, network, addr string) (conn net.Conn, err error)
 
 // Proxy is a proxy that can handle HTTP(S) traffic
 type Proxy interface {
