@@ -33,6 +33,7 @@ func TestDialFailureHTTP(t *testing.T) {
 			Body:       ioutil.NopCloser(bytes.NewReader([]byte(err.Error()))),
 		}
 	}
+	p := New(&Opts{})
 	h := HTTP(false, 0, nil, nil, onError, func(net, addr string) (net.Conn, error) {
 		return d.Dial(net, addr)
 	})
