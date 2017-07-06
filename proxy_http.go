@@ -95,7 +95,17 @@ func (proxy *proxy) processRequests(remoteAddr string, req *http.Request, downst
 
 	first := true
 	for {
-		modifiedReq := proxy.OnRequest(req)
+		modifiedReq, shortCircuitResp := proxy.OnRequest(req)
+		if shortCircuitResp != nil {
+			shortCircuitResp.Request = req
+			// Discard what remains of the request
+			req.Write(ioutil.Discard)
+			proxy.writeResponse(downstream, shortCircuitResp)
+			if shortCircuitResp.Close {
+				return nil
+			}
+			continue
+		}
 		discardRequest := first && proxy.DiscardFirstRequest
 		if discardRequest {
 			err := modifiedReq.Write(ioutil.Discard)
@@ -268,8 +278,8 @@ func isUnexpected(err error) bool {
 	return !strings.HasSuffix(text, "EOF") && !strings.Contains(text, "use of closed network connection") && !strings.Contains(text, "Use of idled network connection") && !strings.Contains(text, "broken pipe")
 }
 
-func defaultOnRequest(req *http.Request) *http.Request {
-	return req
+func defaultOnRequest(req *http.Request) (*http.Request, *http.Response) {
+	return req, nil
 }
 
 func defaultOnResponse(resp *http.Response) *http.Response {

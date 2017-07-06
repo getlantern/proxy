@@ -34,8 +34,15 @@ type Opts struct {
 	// BufferSource specifies a BufferSource, leave nil to use default.
 	BufferSource BufferSource
 
-	// OnRequest, if specified, is called on every read request (HTTP only).
-	OnRequest func(req *http.Request) *http.Request
+	// OnRequest, if specified, is called on every read request. It must always
+	// return a Request. It can optionally return a Response, in which case
+	// processing is interrupted and that Response is written downstream.
+	// (HTTP only).
+	OnRequest func(req *http.Request) (*http.Request, *http.Response)
+
+	// OnCONNECT, if specified, is called on all CONNECT requests. It behaves
+	// identically to OnRequest.
+	OnCONNECT func(req *http.Request) (*http.Request, *http.Response)
 
 	// OnResponse, if specified, is called on every read response (HTTP only).
 	OnResponse func(resp *http.Response) *http.Response

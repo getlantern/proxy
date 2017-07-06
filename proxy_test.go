@@ -22,18 +22,6 @@ const (
 	okHeader = "X-Test-OK"
 )
 
-func roundTrip(p Proxy, req *http.Request) (resp *http.Response, roundTripErr error, handleErr error) {
-	toSend := &bytes.Buffer{}
-	roundTripErr = req.Write(toSend)
-	if roundTripErr != nil {
-		return
-	}
-	received := &bytes.Buffer{}
-	handleErr = p.Handle(mockconn.New(received, toSend))
-	resp, roundTripErr = http.ReadResponse(bufio.NewReader(bytes.NewReader(received.Bytes())), req)
-	return
-}
-
 func TestDialFailureHTTP(t *testing.T) {
 	errorText := "I don't want to dial"
 	d := mockconn.FailingDialer(errors.New(errorText))
@@ -111,6 +99,47 @@ func TestDialFailureCONNECTDontWaitForUpstream(t *testing.T) {
 	}
 	assert.Equal(t, "thehost:123", d.LastDialed(), "Should have used specified port of 123")
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+func TestShortCircuitHTTP(t *testing.T) {
+	p := New(&Opts{
+		OnRequest: func(*http.Request) (*http.Request, *http.Response) {
+			return nil, &http.Response{
+				Header:     make(http.Header),
+				StatusCode: http.StatusForbidden,
+				Close:      true,
+			}
+		},
+	})
+	req, _ := http.NewRequest(http.MethodGet, "http://thehost:123", nil)
+	resp, roundTripErr, handleErr := roundTrip(p, req)
+	if !assert.NoError(t, roundTripErr) {
+		return
+	}
+	if !assert.NoError(t, handleErr) {
+		return
+	}
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+}
+
+func TestShortCircuitCONNECT(t *testing.T) {
+	p := New(&Opts{
+		OnCONNECT: func(*http.Request) (*http.Request, *http.Response) {
+			return nil, &http.Response{
+				Header:     make(http.Header),
+				StatusCode: http.StatusForbidden,
+			}
+		},
+	})
+	req, _ := http.NewRequest(http.MethodConnect, "http://thehost:123", nil)
+	resp, roundTripErr, handleErr := roundTrip(p, req)
+	if !assert.NoError(t, roundTripErr) {
+		return
+	}
+	if !assert.NoError(t, handleErr) {
+		return
+	}
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
 }
 
 func TestCONNECTWaitForUpstream(t *testing.T) {
@@ -247,11 +276,11 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 		return net.Dial("tcp", l.Addr().String())
 	}
 
-	onRequest := func(req *http.Request) *http.Request {
+	onRequest := func(req *http.Request) (*http.Request, *http.Response) {
 		if req.RemoteAddr == "" {
 			t.Fatal("Request missing RemoteAddr!")
 		}
-		return req
+		return req, nil
 	}
 
 	isConnect := requestMethod == "CONNECT"
@@ -361,14 +390,14 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 	assert.NoError(t, counter.AssertDelta(0), "All connections should have been closed")
 }
 
-func dumpRequest(req *http.Request) string {
-	buf := &bytes.Buffer{}
-	req.Write(buf)
-	return buf.String()
-}
-
-func dumpResponse(resp *http.Response) string {
-	buf := &bytes.Buffer{}
-	resp.Write(buf)
-	return buf.String()
+func roundTrip(p Proxy, req *http.Request) (resp *http.Response, roundTripErr error, handleErr error) {
+	toSend := &bytes.Buffer{}
+	roundTripErr = req.Write(toSend)
+	if roundTripErr != nil {
+		return
+	}
+	received := &bytes.Buffer{}
+	handleErr = p.Handle(mockconn.New(received, toSend))
+	resp, roundTripErr = http.ReadResponse(bufio.NewReader(bytes.NewReader(received.Bytes())), req)
+	return
 }

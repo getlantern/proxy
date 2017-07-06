@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"io"
+	"io/ioutil"
 	"net"
 	"net/http"
 	"strings"
@@ -24,6 +25,9 @@ func (opts *Opts) applyCONNECTDefaults() {
 	if opts.BufferSource == nil {
 		opts.BufferSource = &defaultBufferSource{}
 	}
+	if opts.OnCONNECT == nil {
+		opts.OnCONNECT = defaultOnCONNECT
+	}
 }
 
 // interceptor configures an Interceptor.
@@ -35,6 +39,14 @@ type connectInterceptor struct {
 }
 
 func (proxy *proxy) handleCONNECT(downstream net.Conn, req *http.Request) error {
+	modifiedReq, shortCircuitResp := proxy.OnCONNECT(req)
+	if shortCircuitResp != nil {
+		shortCircuitResp.Request = req
+		req.Write(ioutil.Discard)
+		proxy.writeResponse(downstream, shortCircuitResp)
+		return nil
+	}
+
 	var upstream net.Conn
 	var err error
 
@@ -61,7 +73,7 @@ func (proxy *proxy) handleCONNECT(downstream net.Conn, req *http.Request) error 
 		// (mostly correctly) attribute that to a problem with the origin rather
 		// than the proxy and continue to consider the proxy good. See the extensive
 		// discussion here: https://github.com/getlantern/lantern/issues/5514.
-		err = proxy.respondOK(downstream, req)
+		err = proxy.respondOK(downstream, modifiedReq)
 		if err != nil {
 			return err
 		}
@@ -72,7 +84,7 @@ func (proxy *proxy) handleCONNECT(downstream net.Conn, req *http.Request) error 
 	// https://ask.wireshark.org/questions/22988/http-host-header-with-and-without-port-number
 	if upstream, err = proxy.Dial("tcp", req.URL.Host); err != nil {
 		if proxy.OKWaitsForUpstream {
-			respondBadGateway(downstream, req, err)
+			respondBadGateway(downstream, modifiedReq, err)
 		} else {
 			log.Error(err)
 		}
@@ -87,7 +99,7 @@ func (proxy *proxy) handleCONNECT(downstream net.Conn, req *http.Request) error 
 		// server just in case that one is able to reach the origin. This is
 		// relevant, for example, if some proxy servers reside in jurisdictions
 		// where an origin site is blocked but other proxy servers don't.
-		err = proxy.respondOK(downstream, req)
+		err = proxy.respondOK(downstream, modifiedReq)
 		if err != nil {
 			return err
 		}
@@ -129,6 +141,10 @@ func (proxy *proxy) idleKeepAliveHeader() http.Header {
 	header := make(http.Header, 1)
 	proxy.addIdleKeepAlive(header)
 	return header
+}
+
+func defaultOnCONNECT(req *http.Request) (*http.Request, *http.Response) {
+	return req, nil
 }
 
 type defaultBufferSource struct{}
