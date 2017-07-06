@@ -3,7 +3,6 @@ package proxy
 import (
 	"context"
 	"io"
-	"io/ioutil"
 	"net"
 	"net/http"
 	"strings"
@@ -13,6 +12,7 @@ import (
 	"github.com/getlantern/idletiming"
 	"github.com/getlantern/lampshade"
 	"github.com/getlantern/netx"
+	"github.com/getlantern/proxy/filters"
 )
 
 // BufferSource is a source for buffers used in reading/writing.
@@ -26,9 +26,6 @@ func (opts *Opts) applyCONNECTDefaults() {
 	if opts.BufferSource == nil {
 		opts.BufferSource = &defaultBufferSource{}
 	}
-	if opts.OnCONNECT == nil {
-		opts.OnCONNECT = defaultOnCONNECT
-	}
 }
 
 // interceptor configures an Interceptor.
@@ -40,73 +37,78 @@ type connectInterceptor struct {
 }
 
 func (proxy *proxy) handleCONNECT(ctx context.Context, downstream net.Conn, req *http.Request) error {
-	modifiedReq, shortCircuitResp := proxy.OnCONNECT(ctx, req)
-	if shortCircuitResp != nil {
-		shortCircuitResp.Request = req
-		req.Write(ioutil.Discard)
-		proxy.writeResponse(ctx, downstream, shortCircuitResp)
-		return nil
+	resp, err := proxy.Filter.Apply(ctx, req, proxy.nextCONNECT(downstream))
+	if err != nil {
+		resp = proxy.OnError(ctx, req, err)
 	}
+	if resp != nil {
+		return proxy.writeResponse(downstream, resp)
+	}
+	return err
+}
 
-	var upstream net.Conn
-	var err error
+func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
+	return func(ctx context.Context, modifiedReq *http.Request) (*http.Response, error) {
+		var upstream net.Conn
+		closeUpstream := false
+		defer func() {
+			if closeErr := downstream.Close(); closeErr != nil {
+				log.Tracef("Error closing downstream connection: %s", closeErr)
+			}
+			if closeUpstream {
+				if closeErr := upstream.Close(); closeErr != nil {
+					log.Tracef("Error closing upstream connection: %s", closeErr)
+				}
+			}
+		}()
 
-	closeUpstream := false
-	defer func() {
-		if closeErr := downstream.Close(); closeErr != nil {
-			log.Tracef("Error closing downstream connection: %s", closeErr)
-		}
-		if closeUpstream {
-			if closeErr := upstream.Close(); closeErr != nil {
-				log.Tracef("Error closing upstream connection: %s", closeErr)
+		var err error
+
+		if !proxy.OKWaitsForUpstream {
+			// We preemptively respond with an OK on the client. Some user agents like
+			// Chrome consider any non-200 OK response from the proxy to indicate that
+			// there's a problem with the proxy rather than the origin, causing the user
+			// agent to mark the proxy itself as bad and avoid using it in the future.
+			// By immediately responding 200 OK irrespective of what happens with the
+			// origin, we are signaling to the user agent that the proxy itself is good.
+			// If there is a subsequent problem dialing the origin, the user agent will
+			// (mostly correctly) attribute that to a problem with the origin rather
+			// than the proxy and continue to consider the proxy good. See the extensive
+			// discussion here: https://github.com/getlantern/lantern/issues/5514.
+			err = proxy.respondOK(downstream, modifiedReq)
+			if err != nil {
+				return nil, err
 			}
 		}
-	}()
 
-	if !proxy.OKWaitsForUpstream {
-		// We preemptively respond with an OK on the client. Some user agents like
-		// Chrome consider any non-200 OK response from the proxy to indicate that
-		// there's a problem with the proxy rather than the origin, causing the user
-		// agent to mark the proxy itself as bad and avoid using it in the future.
-		// By immediately responding 200 OK irrespective of what happens with the
-		// origin, we are signaling to the user agent that the proxy itself is good.
-		// If there is a subsequent problem dialing the origin, the user agent will
-		// (mostly correctly) attribute that to a problem with the origin rather
-		// than the proxy and continue to consider the proxy good. See the extensive
-		// discussion here: https://github.com/getlantern/lantern/issues/5514.
-		err = proxy.respondOK(downstream, modifiedReq)
-		if err != nil {
-			return err
+		// Note - for CONNECT requests, we use the Host from the request URL, not the
+		// Host header. See discussion here:
+		// https://ask.wireshark.org/questions/22988/http-host-header-with-and-without-port-number
+		if upstream, err = proxy.Dial(true, "tcp", modifiedReq.URL.Host); err != nil {
+			if proxy.OKWaitsForUpstream {
+				respondBadGateway(downstream, modifiedReq, err)
+			} else {
+				log.Error(err)
+			}
+			return nil, err
 		}
-	}
+		closeUpstream = true
 
-	// Note - for CONNECT requests, we use the Host from the request URL, not the
-	// Host header. See discussion here:
-	// https://ask.wireshark.org/questions/22988/http-host-header-with-and-without-port-number
-	if upstream, err = proxy.Dial(true, "tcp", req.URL.Host); err != nil {
 		if proxy.OKWaitsForUpstream {
-			respondBadGateway(downstream, modifiedReq, err)
-		} else {
-			log.Error(err)
+			// In this case, we're waiting to successfully dial upstream before
+			// responding OK. Lantern uses this logic on server-side proxies so that the
+			// Lantern client retains the opportunity to fail over to a different proxy
+			// server just in case that one is able to reach the origin. This is
+			// relevant, for example, if some proxy servers reside in jurisdictions
+			// where an origin site is blocked but other proxy servers don't.
+			err = proxy.respondOK(downstream, modifiedReq)
+			if err != nil {
+				return nil, err
+			}
 		}
-		return err
-	}
-	closeUpstream = true
 
-	if proxy.OKWaitsForUpstream {
-		// In this case, we're waiting to successfully dial upstream before
-		// responding OK. Lantern uses this logic on server-side proxies so that the
-		// Lantern client retains the opportunity to fail over to a different proxy
-		// server just in case that one is able to reach the origin. This is
-		// relevant, for example, if some proxy servers reside in jurisdictions
-		// where an origin site is blocked but other proxy servers don't.
-		err = proxy.respondOK(downstream, modifiedReq)
-		if err != nil {
-			return err
-		}
+		return nil, proxy.copy(upstream, downstream)
 	}
-
-	return proxy.copy(upstream, downstream)
 }
 
 func (proxy *proxy) copy(upstream, downstream net.Conn) error {
@@ -142,10 +144,6 @@ func (proxy *proxy) idleKeepAliveHeader() http.Header {
 	header := make(http.Header, 1)
 	proxy.addIdleKeepAlive(header)
 	return header
-}
-
-func defaultOnCONNECT(ctx context.Context, req *http.Request) (*http.Request, *http.Response) {
-	return req, nil
 }
 
 type defaultBufferSource struct{}

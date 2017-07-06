@@ -12,6 +12,14 @@ type Filter interface {
 	Apply(ctx context.Context, req *http.Request, next Next) (*http.Response, error)
 }
 
+// FilterFunc adapts a function to a Filter
+type FilterFunc func(ctx context.Context, req *http.Request, next Next) (*http.Response, error)
+
+// Apply implements the interface Filter
+func (ff FilterFunc) Apply(ctx context.Context, req *http.Request, next Next) (*http.Response, error) {
+	return ff(ctx, req, next)
+}
+
 // Next is a function that's used to indicate that request processing should
 // continue as usual.
 type Next func(ctx context.Context, req *http.Request) (*http.Response, error)

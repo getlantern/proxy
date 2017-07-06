@@ -16,6 +16,7 @@ import (
 
 	"github.com/getlantern/fdcount"
 	"github.com/getlantern/mockconn"
+	"github.com/getlantern/proxy/filters"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -104,13 +105,13 @@ func TestDialFailureCONNECTDontWaitForUpstream(t *testing.T) {
 
 func TestShortCircuitHTTP(t *testing.T) {
 	p := New(&Opts{
-		OnRequest: func(context.Context, *http.Request) (*http.Request, *http.Response) {
-			return nil, &http.Response{
+		Filter: filters.FilterFunc(func(ctx context.Context, req *http.Request, next filters.Next) (*http.Response, error) {
+			return filters.ShortCircuit(req, &http.Response{
 				Header:     make(http.Header),
 				StatusCode: http.StatusForbidden,
 				Close:      true,
-			}
-		},
+			})
+		}),
 	})
 	req, _ := http.NewRequest(http.MethodGet, "http://thehost:123", nil)
 	resp, roundTripErr, handleErr := roundTrip(p, req)
@@ -125,12 +126,12 @@ func TestShortCircuitHTTP(t *testing.T) {
 
 func TestShortCircuitCONNECT(t *testing.T) {
 	p := New(&Opts{
-		OnCONNECT: func(context.Context, *http.Request) (*http.Request, *http.Response) {
-			return nil, &http.Response{
+		Filter: filters.FilterFunc(func(ctx context.Context, req *http.Request, next filters.Next) (*http.Response, error) {
+			return filters.ShortCircuit(req, &http.Response{
 				Header:     make(http.Header),
 				StatusCode: http.StatusForbidden,
-			}
-		},
+			})
+		}),
 	})
 	req, _ := http.NewRequest(http.MethodConnect, "http://thehost:123", nil)
 	resp, roundTripErr, handleErr := roundTrip(p, req)
@@ -277,19 +278,19 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 		return net.Dial("tcp", l.Addr().String())
 	}
 
-	onRequest := func(ctx context.Context, req *http.Request) (*http.Request, *http.Response) {
+	filter := filters.FilterFunc(func(ctx context.Context, req *http.Request, next filters.Next) (*http.Response, error) {
 		if req.RemoteAddr == "" {
 			t.Fatal("Request missing RemoteAddr!")
 		}
-		return req, nil
-	}
+		return next(ctx, req)
+	})
 
 	isConnect := requestMethod == "CONNECT"
 	p := New(&Opts{
 		IdleTimeout:         30 * time.Second,
 		OKWaitsForUpstream:  okWaitsForUpstream,
 		DiscardFirstRequest: discardFirstRequest,
-		OnRequest:           onRequest,
+		Filter:              filter,
 		Dial:                dial,
 	})
 
@@ -349,6 +350,7 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 		assert.Equal(t, "subdomain.thehost:756", body, "Should have left port alone")
 	}
 	if !discardFirstRequest {
+		log.Debug(resp)
 		assert.Regexp(t, "timeout=\\d+", resp.Header.Get("Keep-Alive"), "All HTTP responses' headers should contain a Keep-Alive timeout")
 	}
 

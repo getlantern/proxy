@@ -12,6 +12,7 @@ import (
 
 	"github.com/getlantern/golog"
 	"github.com/getlantern/hidden"
+	"github.com/getlantern/proxy/filters"
 )
 
 var (
@@ -35,18 +36,8 @@ type Opts struct {
 	// BufferSource specifies a BufferSource, leave nil to use default.
 	BufferSource BufferSource
 
-	// OnRequest, if specified, is called on every read request. It must always
-	// return a Request. It can optionally return a Response, in which case
-	// processing is interrupted and that Response is written downstream.
-	// (HTTP only).
-	OnRequest func(ctx context.Context, req *http.Request) (*http.Request, *http.Response)
-
-	// OnCONNECT, if specified, is called on all CONNECT requests. It behaves
-	// identically to OnRequest.
-	OnCONNECT func(ctx context.Context, req *http.Request) (*http.Request, *http.Response)
-
-	// OnResponse, if specified, is called on every read response (HTTP only).
-	OnResponse func(ctx context.Context, resp *http.Response) *http.Response
+	// Filter is an optional Filter that will be invoked for every Request
+	Filter filters.Filter
 
 	// OnError, if specified, can return a response to be presented to the client
 	// in the event that there's an error round-tripping upstream. If the function

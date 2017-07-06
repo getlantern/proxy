@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/getlantern/errors"
+	"github.com/getlantern/proxy/filters"
 )
 
 type contextKey string
@@ -34,22 +35,20 @@ func DownstreamBuffered(ctx context.Context) *bufio.Reader {
 
 func (opts *Opts) applyHTTPDefaults() {
 	// Apply defaults
-	if opts.OnRequest == nil {
-		opts.OnRequest = defaultOnRequest
-	}
-	if opts.OnResponse == nil {
-		opts.OnResponse = defaultOnResponse
+	if opts.Filter == nil {
+		opts.Filter = filters.FilterFunc(defaultFilter)
 	}
 	if opts.OnError == nil {
 		opts.OnError = defaultOnError
 	}
 	if opts.IdleTimeout > 0 {
-		origOnResponse := opts.OnResponse
-		opts.OnResponse = func(ctx context.Context, resp *http.Response) *http.Response {
-			resp = origOnResponse(ctx, resp)
-			opts.addIdleKeepAlive(resp.Header)
-			return resp
-		}
+		opts.Filter = filters.Join(filters.FilterFunc(func(ctx context.Context, req *http.Request, next filters.Next) (*http.Response, error) {
+			resp, err := next(ctx, req)
+			if resp != nil {
+				opts.addIdleKeepAlive(resp.Header)
+			}
+			return resp, err
+		}), opts.Filter)
 	}
 }
 
@@ -79,7 +78,7 @@ func (proxy *proxy) Handle(ctx context.Context, downstream net.Conn) error {
 	if err != nil {
 		errResp := proxy.OnError(ctx, req, err)
 		if errResp != nil {
-			proxy.writeResponse(ctx, downstream, errResp)
+			proxy.writeResponse(downstream, errResp)
 		}
 		return err
 	}
@@ -116,55 +115,54 @@ func (proxy *proxy) processRequests(ctx context.Context, remoteAddr string, req 
 
 	first := true
 	for {
-		modifiedReq, shortCircuitResp := proxy.OnRequest(ctx, req)
-		if shortCircuitResp != nil {
-			shortCircuitResp.Request = req
-			// Discard what remains of the request
-			req.Write(ioutil.Discard)
-			proxy.writeResponse(ctx, downstream, shortCircuitResp)
-			if shortCircuitResp.Close {
-				return nil
-			}
-			continue
-		}
-		discardRequest := first && proxy.DiscardFirstRequest
-		if discardRequest {
-			err := modifiedReq.Write(ioutil.Discard)
-			if err != nil {
-				return errors.New("Error discarding first request: %v", err)
-			}
-		} else {
-			resp, err := tr.RoundTrip(prepareRequest(modifiedReq))
-			if err != nil {
-				errResp := proxy.OnError(ctx, req, err)
-				if errResp != nil {
-					errResp.Request = req
-					proxy.writeResponse(ctx, downstream, errResp)
+		resp, err := proxy.Filter.Apply(ctx, req, func(ctx context.Context, modifiedReq *http.Request) (*http.Response, error) {
+			discardRequest := first && proxy.DiscardFirstRequest
+			if discardRequest {
+				err := modifiedReq.Write(ioutil.Discard)
+				if err != nil {
+					return nil, errors.New("Error discarding first request: %v", err)
 				}
-				return err
+				return nil, nil
 			}
-			writeErr := proxy.writeResponse(ctx, downstream, resp)
+			return tr.RoundTrip(prepareRequest(modifiedReq))
+		})
+
+		if err != nil {
+			resp = proxy.OnError(ctx, req, err)
+		}
+
+		if resp != nil {
+			if resp.Request == nil {
+				resp.Request = req
+			}
+			writeErr := proxy.writeResponse(downstream, resp)
 			if writeErr != nil {
 				if isUnexpected(writeErr) {
 					return errors.New("Unable to write response to downstream: %v", writeErr)
 				}
 				// Error is not unexpected, but we're done
-				return nil
+				return err
 			}
 		}
 
 		if req.Close {
 			// Client signaled that they would close the connection after this
 			// request, finish
-			return nil
+			return err
 		}
 
+		if err == nil && resp != nil && resp.Close {
+			// Last response, finish
+			return err
+		}
+
+		// read the next request
 		req, readErr = http.ReadRequest(downstreamBuffered)
 		if readErr != nil {
 			if isUnexpected(readErr) {
 				return errors.New("Unable to read next request from downstream: %v", readErr)
 			}
-			return nil
+			return err
 		}
 
 		// Preserve remote address from original request
@@ -173,7 +171,7 @@ func (proxy *proxy) processRequests(ctx context.Context, remoteAddr string, req 
 	}
 }
 
-func (proxy *proxy) writeResponse(ctx context.Context, downstream io.Writer, resp *http.Response) error {
+func (proxy *proxy) writeResponse(downstream io.Writer, resp *http.Response) error {
 	out := downstream
 	belowHTTP11 := !resp.Request.ProtoAtLeast(1, 1)
 	if belowHTTP11 && resp.StatusCode < 200 {
@@ -181,7 +179,7 @@ func (proxy *proxy) writeResponse(ctx context.Context, downstream io.Writer, res
 		// see http://coad.measurement-factory.com/cgi-bin/coad/SpecCgi?spec_id=rfc2616#excerpt/rfc2616/859a092cb26bde76c25284196171c94d
 		out = ioutil.Discard
 	} else {
-		resp = proxy.OnResponse(ctx, prepareResponse(resp, belowHTTP11))
+		resp = prepareResponse(resp, belowHTTP11)
 	}
 	err := resp.Write(out)
 	// resp.Write closes the body only if it's successfully sent. Close
@@ -268,7 +266,7 @@ func copyHeadersForForwarding(dst, src http.Header) {
 			// section 14.10 of rfc2616
 			// the slice is short typically, don't bother sort it to speed up lookup
 			extraHopByHopHeaders = vv
-		case "Keep-Alive":
+		// case "Keep-Alive":
 		case "Proxy-Authenticate":
 		case "Proxy-Authorization":
 		case "TE":
@@ -299,12 +297,8 @@ func isUnexpected(err error) bool {
 	return !strings.HasSuffix(text, "EOF") && !strings.Contains(text, "use of closed network connection") && !strings.Contains(text, "Use of idled network connection") && !strings.Contains(text, "broken pipe")
 }
 
-func defaultOnRequest(ctx context.Context, req *http.Request) (*http.Request, *http.Response) {
-	return req, nil
-}
-
-func defaultOnResponse(ctx context.Context, resp *http.Response) *http.Response {
-	return resp
+func defaultFilter(ctx context.Context, req *http.Request, next filters.Next) (*http.Response, error) {
+	return next(ctx, req)
 }
 
 func defaultOnError(ctx context.Context, req *http.Request, err error) *http.Response {
