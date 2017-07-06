@@ -3,6 +3,7 @@ package proxy
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io/ioutil"
@@ -25,7 +26,7 @@ const (
 func TestDialFailureHTTP(t *testing.T) {
 	errorText := "I don't want to dial"
 	d := mockconn.FailingDialer(errors.New(errorText))
-	onError := func(req *http.Request, err error) *http.Response {
+	onError := func(ctx context.Context, req *http.Request, err error) *http.Response {
 		return &http.Response{
 			StatusCode: http.StatusBadGateway,
 			Body:       ioutil.NopCloser(bytes.NewReader([]byte(err.Error()))),
@@ -103,7 +104,7 @@ func TestDialFailureCONNECTDontWaitForUpstream(t *testing.T) {
 
 func TestShortCircuitHTTP(t *testing.T) {
 	p := New(&Opts{
-		OnRequest: func(*http.Request) (*http.Request, *http.Response) {
+		OnRequest: func(context.Context, *http.Request) (*http.Request, *http.Response) {
 			return nil, &http.Response{
 				Header:     make(http.Header),
 				StatusCode: http.StatusForbidden,
@@ -124,7 +125,7 @@ func TestShortCircuitHTTP(t *testing.T) {
 
 func TestShortCircuitCONNECT(t *testing.T) {
 	p := New(&Opts{
-		OnCONNECT: func(*http.Request) (*http.Request, *http.Response) {
+		OnCONNECT: func(context.Context, *http.Request) (*http.Request, *http.Response) {
 			return nil, &http.Response{
 				Header:     make(http.Header),
 				StatusCode: http.StatusForbidden,
@@ -203,7 +204,7 @@ func TestHTTPDownstreamError(t *testing.T) {
 				return
 			}
 			conn.Close()
-			go p.Handle(conn)
+			go p.Handle(context.Background(), conn)
 		}
 	}()
 
@@ -276,7 +277,7 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 		return net.Dial("tcp", l.Addr().String())
 	}
 
-	onRequest := func(req *http.Request) (*http.Request, *http.Response) {
+	onRequest := func(ctx context.Context, req *http.Request) (*http.Request, *http.Response) {
 		if req.RemoteAddr == "" {
 			t.Fatal("Request missing RemoteAddr!")
 		}
@@ -298,7 +299,7 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 			if acceptErr != nil {
 				return
 			}
-			go p.Handle(conn)
+			go p.Handle(context.Background(), conn)
 		}
 	}()
 
@@ -397,7 +398,7 @@ func roundTrip(p Proxy, req *http.Request) (resp *http.Response, roundTripErr er
 		return
 	}
 	received := &bytes.Buffer{}
-	handleErr = p.Handle(mockconn.New(received, toSend))
+	handleErr = p.Handle(context.Background(), mockconn.New(received, toSend))
 	resp, roundTripErr = http.ReadResponse(bufio.NewReader(bytes.NewReader(received.Bytes())), req)
 	return
 }

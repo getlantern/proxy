@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bufio"
+	"context"
 	"io"
 	"io/ioutil"
 	"net"
@@ -26,8 +27,8 @@ func (opts *Opts) applyHTTPDefaults() {
 	}
 	if opts.IdleTimeout > 0 {
 		origOnResponse := opts.OnResponse
-		opts.OnResponse = func(resp *http.Response) *http.Response {
-			resp = origOnResponse(resp)
+		opts.OnResponse = func(ctx context.Context, resp *http.Response) *http.Response {
+			resp = origOnResponse(ctx, resp)
 			opts.addIdleKeepAlive(resp.Header)
 			return resp
 		}
@@ -44,7 +45,7 @@ type httpInterceptor struct {
 }
 
 // Handle implements the interface Proxy
-func (proxy *proxy) Handle(downstream net.Conn) error {
+func (proxy *proxy) Handle(ctx context.Context, downstream net.Conn) error {
 	downstreamBuffered := bufio.NewReader(downstream)
 
 	// Read initial request
@@ -56,20 +57,20 @@ func (proxy *proxy) Handle(downstream net.Conn) error {
 		}
 	}
 	if err != nil {
-		errResp := proxy.OnError(req, err)
+		errResp := proxy.OnError(ctx, req, err)
 		if errResp != nil {
-			proxy.writeResponse(downstream, errResp)
+			proxy.writeResponse(ctx, downstream, errResp)
 		}
 		return err
 	}
 
 	if req.Method == http.MethodConnect {
-		return proxy.handleCONNECT(downstream, req)
+		return proxy.handleCONNECT(ctx, downstream, req)
 	}
-	return proxy.handleHTTP(downstream, downstreamBuffered, req)
+	return proxy.handleHTTP(ctx, downstream, downstreamBuffered, req)
 }
 
-func (proxy *proxy) handleHTTP(downstream net.Conn, downstreamBuffered *bufio.Reader, req *http.Request) error {
+func (proxy *proxy) handleHTTP(ctx context.Context, downstream net.Conn, downstreamBuffered *bufio.Reader, req *http.Request) error {
 	tr := &http.Transport{
 		Dial: func(net, addr string) (net.Conn, error) {
 			return proxy.Dial(false, net, addr)
@@ -87,20 +88,20 @@ func (proxy *proxy) handleHTTP(downstream net.Conn, downstreamBuffered *bufio.Re
 		tr.CloseIdleConnections()
 	}()
 
-	return proxy.processRequests(req.RemoteAddr, req, downstream, downstreamBuffered, tr)
+	return proxy.processRequests(ctx, req.RemoteAddr, req, downstream, downstreamBuffered, tr)
 }
 
-func (proxy *proxy) processRequests(remoteAddr string, req *http.Request, downstream net.Conn, downstreamBuffered *bufio.Reader, tr *http.Transport) error {
+func (proxy *proxy) processRequests(ctx context.Context, remoteAddr string, req *http.Request, downstream net.Conn, downstreamBuffered *bufio.Reader, tr *http.Transport) error {
 	var readErr error
 
 	first := true
 	for {
-		modifiedReq, shortCircuitResp := proxy.OnRequest(req)
+		modifiedReq, shortCircuitResp := proxy.OnRequest(ctx, req)
 		if shortCircuitResp != nil {
 			shortCircuitResp.Request = req
 			// Discard what remains of the request
 			req.Write(ioutil.Discard)
-			proxy.writeResponse(downstream, shortCircuitResp)
+			proxy.writeResponse(ctx, downstream, shortCircuitResp)
 			if shortCircuitResp.Close {
 				return nil
 			}
@@ -115,14 +116,14 @@ func (proxy *proxy) processRequests(remoteAddr string, req *http.Request, downst
 		} else {
 			resp, err := tr.RoundTrip(prepareRequest(modifiedReq))
 			if err != nil {
-				errResp := proxy.OnError(req, err)
+				errResp := proxy.OnError(ctx, req, err)
 				if errResp != nil {
 					errResp.Request = req
-					proxy.writeResponse(downstream, errResp)
+					proxy.writeResponse(ctx, downstream, errResp)
 				}
 				return err
 			}
-			writeErr := proxy.writeResponse(downstream, resp)
+			writeErr := proxy.writeResponse(ctx, downstream, resp)
 			if writeErr != nil {
 				if isUnexpected(writeErr) {
 					return errors.New("Unable to write response to downstream: %v", writeErr)
@@ -152,7 +153,7 @@ func (proxy *proxy) processRequests(remoteAddr string, req *http.Request, downst
 	}
 }
 
-func (proxy *proxy) writeResponse(downstream io.Writer, resp *http.Response) error {
+func (proxy *proxy) writeResponse(ctx context.Context, downstream io.Writer, resp *http.Response) error {
 	out := downstream
 	belowHTTP11 := !resp.Request.ProtoAtLeast(1, 1)
 	if belowHTTP11 && resp.StatusCode < 200 {
@@ -160,7 +161,7 @@ func (proxy *proxy) writeResponse(downstream io.Writer, resp *http.Response) err
 		// see http://coad.measurement-factory.com/cgi-bin/coad/SpecCgi?spec_id=rfc2616#excerpt/rfc2616/859a092cb26bde76c25284196171c94d
 		out = ioutil.Discard
 	} else {
-		resp = proxy.OnResponse(prepareResponse(resp, belowHTTP11))
+		resp = proxy.OnResponse(ctx, prepareResponse(resp, belowHTTP11))
 	}
 	err := resp.Write(out)
 	// resp.Write closes the body only if it's successfully sent. Close
@@ -278,14 +279,14 @@ func isUnexpected(err error) bool {
 	return !strings.HasSuffix(text, "EOF") && !strings.Contains(text, "use of closed network connection") && !strings.Contains(text, "Use of idled network connection") && !strings.Contains(text, "broken pipe")
 }
 
-func defaultOnRequest(req *http.Request) (*http.Request, *http.Response) {
+func defaultOnRequest(ctx context.Context, req *http.Request) (*http.Request, *http.Response) {
 	return req, nil
 }
 
-func defaultOnResponse(resp *http.Response) *http.Response {
+func defaultOnResponse(ctx context.Context, resp *http.Response) *http.Response {
 	return resp
 }
 
-func defaultOnError(req *http.Request, err error) *http.Response {
+func defaultOnError(ctx context.Context, req *http.Request, err error) *http.Response {
 	return nil
 }

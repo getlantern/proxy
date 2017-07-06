@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"io"
 	"io/ioutil"
 	"net"
@@ -38,12 +39,12 @@ type connectInterceptor struct {
 	okWaitsForUpstream bool
 }
 
-func (proxy *proxy) handleCONNECT(downstream net.Conn, req *http.Request) error {
-	modifiedReq, shortCircuitResp := proxy.OnCONNECT(req)
+func (proxy *proxy) handleCONNECT(ctx context.Context, downstream net.Conn, req *http.Request) error {
+	modifiedReq, shortCircuitResp := proxy.OnCONNECT(ctx, req)
 	if shortCircuitResp != nil {
 		shortCircuitResp.Request = req
 		req.Write(ioutil.Discard)
-		proxy.writeResponse(downstream, shortCircuitResp)
+		proxy.writeResponse(ctx, downstream, shortCircuitResp)
 		return nil
 	}
 
@@ -143,7 +144,7 @@ func (proxy *proxy) idleKeepAliveHeader() http.Header {
 	return header
 }
 
-func defaultOnCONNECT(req *http.Request) (*http.Request, *http.Response) {
+func defaultOnCONNECT(ctx context.Context, req *http.Request) (*http.Request, *http.Response) {
 	return req, nil
 }
 

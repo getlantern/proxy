@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -22,7 +23,7 @@ type DialFunc func(isCONNECT bool, network, addr string) (conn net.Conn, err err
 
 // Proxy is a proxy that can handle HTTP(S) traffic
 type Proxy interface {
-	Handle(conn net.Conn) error
+	Handle(ctx context.Context, conn net.Conn) error
 }
 
 // Opts defines options for configuring a Proxy
@@ -38,19 +39,19 @@ type Opts struct {
 	// return a Request. It can optionally return a Response, in which case
 	// processing is interrupted and that Response is written downstream.
 	// (HTTP only).
-	OnRequest func(req *http.Request) (*http.Request, *http.Response)
+	OnRequest func(ctx context.Context, req *http.Request) (*http.Request, *http.Response)
 
 	// OnCONNECT, if specified, is called on all CONNECT requests. It behaves
 	// identically to OnRequest.
-	OnCONNECT func(req *http.Request) (*http.Request, *http.Response)
+	OnCONNECT func(ctx context.Context, req *http.Request) (*http.Request, *http.Response)
 
 	// OnResponse, if specified, is called on every read response (HTTP only).
-	OnResponse func(resp *http.Response) *http.Response
+	OnResponse func(ctx context.Context, resp *http.Response) *http.Response
 
 	// OnError, if specified, can return a response to be presented to the client
 	// in the event that there's an error round-tripping upstream. If the function
 	// returns no response, nothing is written to the client. (HTTP only)
-	OnError func(req *http.Request, err error) *http.Response
+	OnError func(ctx context.Context, req *http.Request, err error) *http.Response
 
 	// DiscardFirstRequest, if true, causes the first request to the handler to be
 	// discarded (HTTP only).
