@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/getlantern/fdcount"
-	"github.com/getlantern/httptest"
 	"github.com/getlantern/mockconn"
 	"github.com/stretchr/testify/assert"
 )
@@ -23,30 +22,42 @@ const (
 	okHeader = "X-Test-OK"
 )
 
+func roundTrip(p Proxy, req *http.Request) (resp *http.Response, roundTripErr error, handleErr error) {
+	toSend := &bytes.Buffer{}
+	roundTripErr = req.Write(toSend)
+	if roundTripErr != nil {
+		return
+	}
+	received := &bytes.Buffer{}
+	handleErr = p.Handle(mockconn.New(received, toSend))
+	resp, roundTripErr = http.ReadResponse(bufio.NewReader(bytes.NewReader(received.Bytes())), req)
+	return
+}
+
 func TestDialFailureHTTP(t *testing.T) {
 	errorText := "I don't want to dial"
 	d := mockconn.FailingDialer(errors.New(errorText))
-	w := httptest.NewRecorder(nil)
 	onError := func(req *http.Request, err error) *http.Response {
 		return &http.Response{
 			StatusCode: http.StatusBadGateway,
 			Body:       ioutil.NopCloser(bytes.NewReader([]byte(err.Error()))),
 		}
 	}
-	p := New(&Opts{})
-	h := HTTP(false, 0, nil, nil, onError, func(net, addr string) (net.Conn, error) {
-		return d.Dial(net, addr)
+	p := New(&Opts{
+		OnError: onError,
+		Dial: func(net, addr string) (net.Conn, error) {
+			return d.Dial(net, addr)
+		},
 	})
 	req, _ := http.NewRequest("GET", "http://thehost:123", nil)
-	err := h(w, req)
-	if !assert.Error(t, err, "Should have gotten error") {
+	resp, roundTripErr, handleErr := roundTrip(p, req)
+	if !assert.NoError(t, roundTripErr) {
+		return
+	}
+	if !assert.Error(t, handleErr, "Should have gotten error") {
 		return
 	}
 	assert.Equal(t, "thehost:123", d.LastDialed(), "Should have used specified port of 123")
-	resp, err := http.ReadResponse(bufio.NewReader(w.Body()), req)
-	if !assert.NoError(t, err) {
-		return
-	}
 	assert.Equal(t, http.StatusBadGateway, resp.StatusCode)
 	body, err := ioutil.ReadAll(resp.Body)
 	if !assert.NoError(t, err) {
@@ -58,20 +69,21 @@ func TestDialFailureHTTP(t *testing.T) {
 func TestDialFailureCONNECTWaitForUpstream(t *testing.T) {
 	errorText := "I don't want to dial"
 	d := mockconn.FailingDialer(errors.New(errorText))
-	w := httptest.NewRecorder(nil)
-	h := CONNECT(0, nil, true, func(net, addr string) (net.Conn, error) {
-		return d.Dial(net, addr)
+	p := New(&Opts{
+		OKWaitsForUpstream: true,
+		Dial: func(net, addr string) (net.Conn, error) {
+			return d.Dial(net, addr)
+		},
 	})
 	req, _ := http.NewRequest("CONNECT", "http://thehost:123", nil)
-	err := h(w, req)
-	if !assert.Error(t, err, "Should have gotten error") {
+	resp, roundTripErr, handleErr := roundTrip(p, req)
+	if !assert.NoError(t, roundTripErr) {
+		return
+	}
+	if !assert.Error(t, handleErr, "Should have gotten error") {
 		return
 	}
 	assert.Equal(t, "thehost:123", d.LastDialed(), "Should have used specified port of 123")
-	resp, err := http.ReadResponse(bufio.NewReader(w.Body()), req)
-	if !assert.NoError(t, err) {
-		return
-	}
 	assert.Equal(t, http.StatusBadGateway, resp.StatusCode)
 	body, err := ioutil.ReadAll(resp.Body)
 	if !assert.NoError(t, err) {
@@ -83,20 +95,21 @@ func TestDialFailureCONNECTWaitForUpstream(t *testing.T) {
 func TestDialFailureCONNECTDontWaitForUpstream(t *testing.T) {
 	errorText := "I don't want to dial"
 	d := mockconn.FailingDialer(errors.New(errorText))
-	w := httptest.NewRecorder(nil)
-	h := CONNECT(0, nil, false, func(net, addr string) (net.Conn, error) {
-		return d.Dial(net, addr)
+	p := New(&Opts{
+		OKWaitsForUpstream: false,
+		Dial: func(net, addr string) (net.Conn, error) {
+			return d.Dial(net, addr)
+		},
 	})
 	req, _ := http.NewRequest("CONNECT", "http://thehost:123", nil)
-	err := h(w, req)
-	if !assert.Error(t, err, "Should have gotten error") {
+	resp, roundTripErr, handleErr := roundTrip(p, req)
+	if !assert.NoError(t, roundTripErr) {
+		return
+	}
+	if !assert.Error(t, handleErr, "Should have gotten error") {
 		return
 	}
 	assert.Equal(t, "thehost:123", d.LastDialed(), "Should have used specified port of 123")
-	resp, err := http.ReadResponse(bufio.NewReader(w.Body()), req)
-	if !assert.NoError(t, err) {
-		return
-	}
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
 
@@ -141,13 +154,29 @@ func TestHTTPDownstreamError(t *testing.T) {
 	}))
 	defer origin.Close()
 
-	intercept := HTTP(false, 30*time.Second, nil, nil, nil, func(network, addr string) (net.Conn, error) {
-		return net.Dial("tcp", origin.Listener.Addr().String())
+	p := New(&Opts{
+		IdleTimeout: 30 * time.Second,
+		Dial: func(network, addr string) (net.Conn, error) {
+			return net.Dial("tcp", origin.Listener.Addr().String())
+		},
 	})
-	proxy := ht.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		intercept(failingHijacker{w}, req)
-	}))
-	defer proxy.Close()
+
+	l, err := net.Listen("tcp", ":0")
+	if !assert.NoError(t, err) {
+		return
+	}
+	defer l.Close()
+
+	go func() {
+		for {
+			conn, acceptErr := l.Accept()
+			if acceptErr != nil {
+				return
+			}
+			conn.Close()
+			go p.Handle(conn)
+		}
+	}()
 
 	_, counter, err := fdcount.Matching("TCP")
 	if !assert.NoError(t, err) {
@@ -161,7 +190,7 @@ func TestHTTPDownstreamError(t *testing.T) {
 	for i := 0; i < n; i++ {
 		go func() {
 			defer wg.Done()
-			conn, err := net.Dial("tcp", proxy.Listener.Addr().String())
+			conn, err := net.Dial("tcp", l.Addr().String())
 			chConnsToClose <- conn
 			if !assert.NoError(t, err) {
 				return
@@ -226,16 +255,23 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 	}
 
 	isConnect := requestMethod == "CONNECT"
-	var intercept Interceptor
-	if isConnect {
-		intercept = CONNECT(30*time.Second, nil, okWaitsForUpstream, dial)
-	} else {
-		intercept = HTTP(discardFirstRequest, 30*time.Second, onRequest, nil, nil, dial)
-	}
+	p := New(&Opts{
+		IdleTimeout:         30 * time.Second,
+		OKWaitsForUpstream:  okWaitsForUpstream,
+		DiscardFirstRequest: discardFirstRequest,
+		OnRequest:           onRequest,
+		Dial:                dial,
+	})
 
-	go http.Serve(pl, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		intercept(w, req)
-	}))
+	go func() {
+		for {
+			conn, acceptErr := pl.Accept()
+			if acceptErr != nil {
+				return
+			}
+			go p.Handle(conn)
+		}
+	}()
 
 	_, counter, err := fdcount.Matching("TCP")
 	if !assert.NoError(t, err) {

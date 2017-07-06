@@ -49,6 +49,12 @@ func (proxy *proxy) Handle(downstream net.Conn) error {
 
 	// Read initial request
 	req, err := http.ReadRequest(downstreamBuffered)
+	if req != nil {
+		remoteAddr := downstream.RemoteAddr()
+		if remoteAddr != nil {
+			req.RemoteAddr = downstream.RemoteAddr().String()
+		}
+	}
 	if err != nil {
 		errResp := proxy.OnError(req, err)
 		if errResp != nil {
