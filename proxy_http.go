@@ -14,6 +14,24 @@ import (
 	"github.com/getlantern/errors"
 )
 
+type contextKey string
+
+const (
+	ctxKeyDownstream         = contextKey("downstream")
+	ctxKeyDownstreamBuffered = contextKey("downstreamBuffered")
+)
+
+// DownstreamConn retrieves the downstream connection from the given Context.
+func DownstreamConn(ctx context.Context) net.Conn {
+	return ctx.Value(ctxKeyDownstream).(net.Conn)
+}
+
+// DownstreamBuffered retrieves the downstream buffered reader from the given
+// Context.
+func DownstreamBuffered(ctx context.Context) *bufio.Reader {
+	return ctx.Value(ctxKeyDownstreamBuffered).(*bufio.Reader)
+}
+
 func (opts *Opts) applyHTTPDefaults() {
 	// Apply defaults
 	if opts.OnRequest == nil {
@@ -47,6 +65,8 @@ type httpInterceptor struct {
 // Handle implements the interface Proxy
 func (proxy *proxy) Handle(ctx context.Context, downstream net.Conn) error {
 	downstreamBuffered := bufio.NewReader(downstream)
+	ctx = context.WithValue(ctx, ctxKeyDownstream, downstream)
+	ctx = context.WithValue(ctx, ctxKeyDownstreamBuffered, downstreamBuffered)
 
 	// Read initial request
 	req, err := http.ReadRequest(downstreamBuffered)
