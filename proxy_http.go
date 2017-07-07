@@ -117,7 +117,7 @@ func (proxy *proxy) processRequests(ctx context.Context, remoteAddr string, req 
 			return tr.RoundTrip(prepareRequest(modifiedReq))
 		})
 
-		if err != nil {
+		if err != nil && resp == nil {
 			resp = proxy.OnError(ctx, req, err)
 		}
 
