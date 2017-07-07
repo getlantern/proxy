@@ -5,8 +5,7 @@ import (
 	"io"
 	"io/ioutil"
 	"net/http"
-
-	"github.com/getlantern/errors"
+	"strings"
 )
 
 // Filter supports intercepting and modifying http requests and responses
@@ -35,6 +34,17 @@ func ShortCircuit(req *http.Request, resp *http.Response) (*http.Response, error
 	return resp, nil
 }
 
+// Fail fails processing, returning a response with the given status code and
+// description populated from error.
+func Fail(req *http.Request, statusCode int, err error) (*http.Response, error) {
+	resp := &http.Response{
+		Request:    req,
+		StatusCode: statusCode,
+		Body:       ioutil.NopCloser(strings.NewReader(err.Error())),
+	}
+	return resp, err
+}
+
 // Discard discards the given request. Make sure to use this when discarding
 // requests in order to make sure that the request body is read.
 func Discard(req *http.Request) (*http.Response, error) {
@@ -47,16 +57,6 @@ func Discard(req *http.Request) (*http.Response, error) {
 
 // Chain is a chain of Filters that acts as an http.Handler.
 type Chain []Filter
-
-// Fail fails execution of the current chain
-func Fail(msg string, args ...interface{}) error {
-	return errors.New(msg, args...)
-}
-
-// Stop stops execution of the current chain
-func Stop() error {
-	return nil
-}
 
 // Join constructs a new chain of filters that executes the filters in order
 // until it encounters a filter that returns false.
