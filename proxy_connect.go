@@ -37,12 +37,15 @@ type connectInterceptor struct {
 }
 
 func (proxy *proxy) handleCONNECT(ctx context.Context, downstream net.Conn, req *http.Request) error {
-	resp, err := proxy.Filter.Apply(ctx, req, proxy.nextCONNECT(downstream))
-	if err != nil {
-		defer downstream.Close()
-		if resp == nil {
-			resp = proxy.OnError(ctx, req, err)
+	defer func() {
+		if closeErr := downstream.Close(); closeErr != nil {
+			log.Tracef("Error closing downstream connection: %s", closeErr)
 		}
+	}()
+
+	resp, err := proxy.Filter.Apply(ctx, req, proxy.nextCONNECT(downstream))
+	if err != nil && resp == nil {
+		resp = proxy.OnError(ctx, req, err)
 	}
 	if resp != nil {
 		return proxy.writeResponse(downstream, req, resp)
@@ -55,9 +58,6 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 		var upstream net.Conn
 		closeUpstream := false
 		defer func() {
-			if closeErr := downstream.Close(); closeErr != nil {
-				log.Tracef("Error closing downstream connection: %s", closeErr)
-			}
 			if closeUpstream {
 				if closeErr := upstream.Close(); closeErr != nil {
 					log.Tracef("Error closing upstream connection: %s", closeErr)
