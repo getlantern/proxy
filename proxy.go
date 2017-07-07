@@ -24,7 +24,11 @@ type DialFunc func(isCONNECT bool, network, addr string) (conn net.Conn, err err
 
 // Proxy is a proxy that can handle HTTP(S) traffic
 type Proxy interface {
+	// Handle handles a single connection
 	Handle(ctx context.Context, conn net.Conn) error
+
+	// Serve runs a server on the given Listener
+	Serve(l net.Listener) error
 }
 
 // Opts defines options for configuring a Proxy

@@ -298,15 +298,7 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 		Dial:               dial,
 	})
 
-	go func() {
-		for {
-			conn, acceptErr := pl.Accept()
-			if acceptErr != nil {
-				return
-			}
-			go p.Handle(context.Background(), conn)
-		}
-	}()
+	go p.Serve(pl)
 
 	_, counter, err := fdcount.Matching("TCP")
 	if !assert.NoError(t, err) {
