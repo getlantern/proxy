@@ -45,8 +45,9 @@ type Opts struct {
 
 	// OnError, if specified, can return a response to be presented to the client
 	// in the event that there's an error round-tripping upstream. If the function
-	// returns no response, nothing is written to the client. (HTTP only)
-	OnError func(ctx context.Context, req *http.Request, err error) *http.Response
+	// returns no response, nothing is written to the client. Read indicates
+	// whether the error occurred on reading a request or not. (HTTP only)
+	OnError func(ctx context.Context, req *http.Request, read bool, err error) *http.Response
 
 	// OKWaitsForUpstream specifies whether or not to wait on dialing upstream
 	// before responding OK to a CONNECT request (CONNECT only).

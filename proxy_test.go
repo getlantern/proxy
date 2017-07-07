@@ -27,7 +27,7 @@ const (
 func TestDialFailureHTTP(t *testing.T) {
 	errorText := "I don't want to dial"
 	d := mockconn.FailingDialer(errors.New(errorText))
-	onError := func(ctx context.Context, req *http.Request, err error) *http.Response {
+	onError := func(ctx context.Context, req *http.Request, read bool, err error) *http.Response {
 		return &http.Response{
 			StatusCode: http.StatusBadGateway,
 			Body:       ioutil.NopCloser(bytes.NewReader([]byte(err.Error()))),

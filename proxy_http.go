@@ -52,16 +52,14 @@ func (opts *Opts) applyHTTPDefaults() {
 	}
 }
 
-type httpInterceptor struct {
-	idleTimeout time.Duration
-	onRequest   func(req *http.Request) *http.Request
-	onResponse  func(resp *http.Response) *http.Response
-	onError     func(req *http.Request, err error) *http.Response
-	dial        DialFunc
-}
-
 // Handle implements the interface Proxy
 func (proxy *proxy) Handle(ctx context.Context, downstream net.Conn) error {
+	defer func() {
+		if closeErr := downstream.Close(); closeErr != nil {
+			log.Tracef("Error closing downstream connection: %s", closeErr)
+		}
+	}()
+
 	downstreamBuffered := bufio.NewReader(downstream)
 	ctx = context.WithValue(ctx, ctxKeyDownstream, downstream)
 	ctx = context.WithValue(ctx, ctxKeyDownstreamBuffered, downstreamBuffered)
@@ -75,7 +73,7 @@ func (proxy *proxy) Handle(ctx context.Context, downstream net.Conn) error {
 		}
 	}
 	if err != nil {
-		errResp := proxy.OnError(ctx, req, err)
+		errResp := proxy.OnError(ctx, req, true, err)
 		if errResp != nil {
 			proxy.writeResponse(downstream, req, errResp)
 		}
@@ -99,13 +97,7 @@ func (proxy *proxy) handleHTTP(ctx context.Context, downstream net.Conn, downstr
 		MaxIdleConnsPerHost: 1,
 	}
 
-	defer func() {
-		if closeErr := downstream.Close(); closeErr != nil {
-			log.Tracef("Error closing downstream connection: %s", closeErr)
-		}
-		tr.CloseIdleConnections()
-	}()
-
+	defer tr.CloseIdleConnections()
 	return proxy.processRequests(ctx, req.RemoteAddr, req, downstream, downstreamBuffered, tr)
 }
 
@@ -118,7 +110,7 @@ func (proxy *proxy) processRequests(ctx context.Context, remoteAddr string, req 
 		})
 
 		if err != nil && resp == nil {
-			resp = proxy.OnError(ctx, req, err)
+			resp = proxy.OnError(ctx, req, false, err)
 		}
 
 		if resp != nil {
@@ -147,6 +139,10 @@ func (proxy *proxy) processRequests(ctx context.Context, remoteAddr string, req 
 		req, readErr = http.ReadRequest(downstreamBuffered)
 		if readErr != nil {
 			if isUnexpected(readErr) {
+				errResp := proxy.OnError(ctx, req, true, readErr)
+				if errResp != nil {
+					proxy.writeResponse(downstream, req, errResp)
+				}
 				return errors.New("Unable to read next request from downstream: %v", readErr)
 			}
 			return err
@@ -162,7 +158,11 @@ func (proxy *proxy) writeResponse(downstream io.Writer, req *http.Request, resp 
 		resp.Request = req
 	}
 	out := downstream
-	belowHTTP11 := !resp.Request.ProtoAtLeast(1, 1)
+	if resp.Request == nil {
+		resp.ProtoMajor = 1
+		resp.ProtoMinor = 1
+	}
+	belowHTTP11 := resp.Request != nil && !resp.Request.ProtoAtLeast(1, 1)
 	if belowHTTP11 && resp.StatusCode < 200 {
 		// HTTP 1.0 doesn't define status codes below 200, discard response
 		// see http://coad.measurement-factory.com/cgi-bin/coad/SpecCgi?spec_id=rfc2616#excerpt/rfc2616/859a092cb26bde76c25284196171c94d
@@ -290,6 +290,6 @@ func defaultFilter(ctx context.Context, req *http.Request, next filters.Next) (*
 	return next(ctx, req)
 }
 
-func defaultOnError(ctx context.Context, req *http.Request, err error) *http.Response {
+func defaultOnError(ctx context.Context, req *http.Request, read bool, err error) *http.Response {
 	return nil
 }
