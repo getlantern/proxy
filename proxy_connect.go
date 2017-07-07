@@ -42,7 +42,7 @@ func (proxy *proxy) handleCONNECT(ctx context.Context, downstream net.Conn, req 
 		resp = proxy.OnError(ctx, req, err)
 	}
 	if resp != nil {
-		return proxy.writeResponse(downstream, resp)
+		return proxy.writeResponse(downstream, req, resp)
 	}
 	return err
 }

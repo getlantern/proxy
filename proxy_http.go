@@ -78,7 +78,7 @@ func (proxy *proxy) Handle(ctx context.Context, downstream net.Conn) error {
 	if err != nil {
 		errResp := proxy.OnError(ctx, req, err)
 		if errResp != nil {
-			proxy.writeResponse(downstream, errResp)
+			proxy.writeResponse(downstream, req, errResp)
 		}
 		return err
 	}
@@ -91,7 +91,7 @@ func (proxy *proxy) Handle(ctx context.Context, downstream net.Conn) error {
 
 func (proxy *proxy) handleHTTP(ctx context.Context, downstream net.Conn, downstreamBuffered *bufio.Reader, req *http.Request) error {
 	tr := &http.Transport{
-		Dial: func(net, addr string) (net.Conn, error) {
+		DialContext: func(ctx context.Context, net, addr string) (net.Conn, error) {
 			return proxy.Dial(false, net, addr)
 		},
 		IdleConnTimeout: proxy.IdleTimeout,
@@ -132,10 +132,7 @@ func (proxy *proxy) processRequests(ctx context.Context, remoteAddr string, req 
 		}
 
 		if resp != nil {
-			if resp.Request == nil {
-				resp.Request = req
-			}
-			writeErr := proxy.writeResponse(downstream, resp)
+			writeErr := proxy.writeResponse(downstream, req, resp)
 			if writeErr != nil {
 				if isUnexpected(writeErr) {
 					return errors.New("Unable to write response to downstream: %v", writeErr)
@@ -171,7 +168,10 @@ func (proxy *proxy) processRequests(ctx context.Context, remoteAddr string, req 
 	}
 }
 
-func (proxy *proxy) writeResponse(downstream io.Writer, resp *http.Response) error {
+func (proxy *proxy) writeResponse(downstream io.Writer, req *http.Request, resp *http.Response) error {
+	if resp.Request == nil {
+		resp.Request = req
+	}
 	out := downstream
 	belowHTTP11 := !resp.Request.ProtoAtLeast(1, 1)
 	if belowHTTP11 && resp.StatusCode < 200 {
