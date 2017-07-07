@@ -2,6 +2,8 @@ package filters
 
 import (
 	"context"
+	"io"
+	"io/ioutil"
 	"net/http"
 
 	"github.com/getlantern/errors"
@@ -31,6 +33,16 @@ func ShortCircuit(req *http.Request, resp *http.Response) (*http.Response, error
 		resp.Header = make(http.Header)
 	}
 	return resp, nil
+}
+
+// Discard discards the given request. Make sure to use this when discarding
+// requests in order to make sure that the request body is read.
+func Discard(req *http.Request) (*http.Response, error) {
+	if req.Body != nil {
+		io.Copy(ioutil.Discard, req.Body)
+		req.Body.Close()
+	}
+	return nil, nil
 }
 
 // Chain is a chain of Filters that acts as an http.Handler.

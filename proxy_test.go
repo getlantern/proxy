@@ -285,7 +285,7 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 		}
 		if discardFirstRequest && first {
 			first = false
-			return nil, nil
+			return filters.Discard(req)
 		}
 		return next(ctx, req)
 	})

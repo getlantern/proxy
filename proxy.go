@@ -62,6 +62,11 @@ type proxy struct {
 
 // New creates a new Proxy configured with the specified Opts.
 func New(opts *Opts) Proxy {
+	if opts.Dial == nil {
+		opts.Dial = func(isCONNECT bool, network, addr string) (conn net.Conn, err error) {
+			return net.DialTimeout(network, addr, 30*time.Second)
+		}
+	}
 	opts.applyHTTPDefaults()
 	opts.applyCONNECTDefaults()
 	return &proxy{opts}
