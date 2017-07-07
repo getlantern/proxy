@@ -39,7 +39,10 @@ type connectInterceptor struct {
 func (proxy *proxy) handleCONNECT(ctx context.Context, downstream net.Conn, req *http.Request) error {
 	resp, err := proxy.Filter.Apply(ctx, req, proxy.nextCONNECT(downstream))
 	if err != nil {
-		resp = proxy.OnError(ctx, req, err)
+		defer downstream.Close()
+		if resp == nil {
+			resp = proxy.OnError(ctx, req, err)
+		}
 	}
 	if resp != nil {
 		return proxy.writeResponse(downstream, req, resp)
