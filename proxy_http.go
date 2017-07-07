@@ -53,12 +53,11 @@ func (opts *Opts) applyHTTPDefaults() {
 }
 
 type httpInterceptor struct {
-	discardFirstRequest bool
-	idleTimeout         time.Duration
-	onRequest           func(req *http.Request) *http.Request
-	onResponse          func(resp *http.Response) *http.Response
-	onError             func(req *http.Request, err error) *http.Response
-	dial                DialFunc
+	idleTimeout time.Duration
+	onRequest   func(req *http.Request) *http.Request
+	onResponse  func(resp *http.Response) *http.Response
+	onError     func(req *http.Request, err error) *http.Response
+	dial        DialFunc
 }
 
 // Handle implements the interface Proxy
@@ -113,17 +112,8 @@ func (proxy *proxy) handleHTTP(ctx context.Context, downstream net.Conn, downstr
 func (proxy *proxy) processRequests(ctx context.Context, remoteAddr string, req *http.Request, downstream net.Conn, downstreamBuffered *bufio.Reader, tr *http.Transport) error {
 	var readErr error
 
-	first := true
 	for {
 		resp, err := proxy.Filter.Apply(ctx, req, func(ctx context.Context, modifiedReq *http.Request) (*http.Response, error) {
-			discardRequest := first && proxy.DiscardFirstRequest
-			if discardRequest {
-				err := modifiedReq.Write(ioutil.Discard)
-				if err != nil {
-					return nil, errors.New("Error discarding first request: %v", err)
-				}
-				return nil, nil
-			}
 			return tr.RoundTrip(prepareRequest(modifiedReq))
 		})
 
@@ -164,7 +154,6 @@ func (proxy *proxy) processRequests(ctx context.Context, remoteAddr string, req 
 
 		// Preserve remote address from original request
 		req.RemoteAddr = remoteAddr
-		first = false
 	}
 }
 

@@ -44,10 +44,6 @@ type Opts struct {
 	// returns no response, nothing is written to the client. (HTTP only)
 	OnError func(ctx context.Context, req *http.Request, err error) *http.Response
 
-	// DiscardFirstRequest, if true, causes the first request to the handler to be
-	// discarded (HTTP only).
-	DiscardFirstRequest bool
-
 	// OKWaitsForUpstream specifies whether or not to wait on dialing upstream
 	// before responding OK to a CONNECT request (CONNECT only).
 	OKWaitsForUpstream bool

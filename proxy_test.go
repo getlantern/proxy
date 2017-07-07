@@ -278,20 +278,24 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 		return net.Dial("tcp", l.Addr().String())
 	}
 
+	first := true
 	filter := filters.FilterFunc(func(ctx context.Context, req *http.Request, next filters.Next) (*http.Response, error) {
 		if req.RemoteAddr == "" {
 			t.Fatal("Request missing RemoteAddr!")
+		}
+		if discardFirstRequest && first {
+			first = false
+			return nil, nil
 		}
 		return next(ctx, req)
 	})
 
 	isConnect := requestMethod == "CONNECT"
 	p := New(&Opts{
-		IdleTimeout:         30 * time.Second,
-		OKWaitsForUpstream:  okWaitsForUpstream,
-		DiscardFirstRequest: discardFirstRequest,
-		Filter:              filter,
-		Dial:                dial,
+		IdleTimeout:        30 * time.Second,
+		OKWaitsForUpstream: okWaitsForUpstream,
+		Filter:             filter,
+		Dial:               dial,
 	})
 
 	go func() {
