@@ -71,9 +71,8 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 		if err != nil {
 			if proxy.OKWaitsForUpstream {
 				return badGateway(modifiedReq, err)
-			} else {
-				log.Error(err)
 			}
+			log.Error(err)
 			return nil, err
 		}
 
@@ -131,6 +130,11 @@ func (proxy *proxy) idleKeepAliveHeader() http.Header {
 	header := make(http.Header, 1)
 	proxy.addIdleKeepAlive(header)
 	return header
+}
+
+func badGateway(req *http.Request, err error) (*http.Response, error) {
+	log.Debugf("Responding BadGateway: %v", err)
+	return filters.Fail(req, http.StatusBadGateway, err)
 }
 
 type defaultBufferSource struct{}

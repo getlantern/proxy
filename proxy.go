@@ -87,8 +87,3 @@ func (opts *Opts) addIdleKeepAlive(header http.Header) {
 		header.Set("Keep-Alive", fmt.Sprintf("timeout=%d", int(opts.IdleTimeout.Seconds())-2))
 	}
 }
-
-func badGateway(req *http.Request, err error) (*http.Response, error) {
-	log.Debugf("Responding BadGateway: %v", err)
-	return filters.Fail(req, http.StatusBadGateway, err)
-}
