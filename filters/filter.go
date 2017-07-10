@@ -40,6 +40,7 @@ func Fail(req *http.Request, statusCode int, err error) (*http.Response, error) 
 	resp := &http.Response{
 		Request:    req,
 		StatusCode: statusCode,
+		Header:     make(http.Header),
 		Body:       ioutil.NopCloser(strings.NewReader(err.Error())),
 	}
 	return resp, err
