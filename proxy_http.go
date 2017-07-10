@@ -20,6 +20,7 @@ type contextKey string
 const (
 	ctxKeyDownstream         = contextKey("downstream")
 	ctxKeyDownstreamBuffered = contextKey("downstreamBuffered")
+	ctxKeyRequestNumber      = contextKey("requestNumber")
 )
 
 // DownstreamConn retrieves the downstream connection from the given Context.
@@ -31,6 +32,13 @@ func DownstreamConn(ctx context.Context) net.Conn {
 // Context.
 func DownstreamBuffered(ctx context.Context) *bufio.Reader {
 	return ctx.Value(ctxKeyDownstreamBuffered).(*bufio.Reader)
+}
+
+// RequestNumber indicates how many requests have been received on the current
+// connection. The RequestNumber for the first request is 1, for the second is 2
+// and so forth.
+func RequestNumber(ctx context.Context) int {
+	return ctx.Value(ctxKeyRequestNumber).(int)
 }
 
 func (opts *Opts) applyHTTPDefaults() {
@@ -63,6 +71,7 @@ func (proxy *proxy) Handle(ctx context.Context, downstream net.Conn) error {
 	downstreamBuffered := bufio.NewReader(downstream)
 	ctx = context.WithValue(ctx, ctxKeyDownstream, downstream)
 	ctx = context.WithValue(ctx, ctxKeyDownstreamBuffered, downstreamBuffered)
+	ctx = context.WithValue(ctx, ctxKeyRequestNumber, 1)
 
 	// Read initial request
 	req, err := http.ReadRequest(downstreamBuffered)
@@ -150,6 +159,7 @@ func (proxy *proxy) processRequests(ctx context.Context, remoteAddr string, req 
 
 		// Preserve remote address from original request
 		req.RemoteAddr = remoteAddr
+		ctx = context.WithValue(ctx, ctxKeyRequestNumber, RequestNumber(ctx)+1)
 	}
 }
 

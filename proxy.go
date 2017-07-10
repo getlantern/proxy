@@ -73,6 +73,18 @@ func New(opts *Opts) Proxy {
 	return &proxy{opts}
 }
 
+// OnFirstOnly returns a filter that applies the given filter only on the first
+// request on a given connection.
+func OnFirstOnly(filter filters.Filter) filters.Filter {
+	return filters.FilterFunc(func(ctx context.Context, req *http.Request, next filters.Next) (*http.Response, error) {
+		requestNumber := RequestNumber(ctx)
+		if requestNumber == 1 {
+			return filter.Apply(ctx, req, next)
+		}
+		return next(ctx, req)
+	})
+}
+
 func (opts *Opts) addIdleKeepAlive(header http.Header) {
 	if opts.IdleTimeout > 0 {
 		// Tell the client when we're going to time out due to idle connections
