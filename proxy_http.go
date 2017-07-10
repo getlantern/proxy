@@ -89,36 +89,36 @@ func (proxy *proxy) Handle(ctx context.Context, downstream net.Conn) error {
 		return err
 	}
 
+	var next filters.Next
 	if req.Method == http.MethodConnect {
-		return proxy.handleCONNECT(ctx, downstream, req)
+		next = proxy.nextCONNECT(downstream)
+	} else {
+		tr := &http.Transport{
+			DialContext: func(ctx context.Context, net, addr string) (net.Conn, error) {
+				return proxy.Dial(false, net, addr)
+			},
+			IdleConnTimeout: proxy.IdleTimeout,
+			// since we have one transport per downstream connection, we don't need
+			// more than this
+			MaxIdleConnsPerHost: 1,
+		}
+
+		defer tr.CloseIdleConnections()
+		next = func(ctx context.Context, modifiedReq *http.Request) (*http.Response, error) {
+			return tr.RoundTrip(prepareRequest(modifiedReq))
+		}
 	}
-	return proxy.handleHTTP(ctx, downstream, downstreamBuffered, req)
+
+	return proxy.processRequests(ctx, req.RemoteAddr, req, downstream, downstreamBuffered, next)
 }
 
-func (proxy *proxy) handleHTTP(ctx context.Context, downstream net.Conn, downstreamBuffered *bufio.Reader, req *http.Request) error {
-	tr := &http.Transport{
-		DialContext: func(ctx context.Context, net, addr string) (net.Conn, error) {
-			return proxy.Dial(false, net, addr)
-		},
-		IdleConnTimeout: proxy.IdleTimeout,
-		// since we have one transport per downstream connection, we don't need
-		// more than this
-		MaxIdleConnsPerHost: 1,
-	}
-
-	defer tr.CloseIdleConnections()
-	return proxy.processRequests(ctx, req.RemoteAddr, req, downstream, downstreamBuffered, tr)
-}
-
-func (proxy *proxy) processRequests(ctx context.Context, remoteAddr string, req *http.Request, downstream net.Conn, downstreamBuffered *bufio.Reader, tr *http.Transport) error {
+func (proxy *proxy) processRequests(ctx context.Context, remoteAddr string, req *http.Request, downstream net.Conn, downstreamBuffered *bufio.Reader, next filters.Next) error {
 	var readErr error
 
 	for {
-		resp, err := proxy.Filter.Apply(ctx, req, func(ctx context.Context, modifiedReq *http.Request) (*http.Response, error) {
-			return tr.RoundTrip(prepareRequest(modifiedReq))
-		})
-
-		if err != nil && resp == nil {
+		resp, err := proxy.Filter.Apply(ctx, req, next)
+		cerr, isConnect := err.(*connectErr)
+		if err != nil && resp == nil && !isConnect {
 			resp = proxy.OnError(ctx, req, false, err)
 		}
 
@@ -131,6 +131,13 @@ func (proxy *proxy) processRequests(ctx context.Context, remoteAddr string, req 
 				// Error is not unexpected, but we're done
 				return err
 			}
+		}
+
+		if isConnect {
+			if cerr.upstream != nil {
+				return proxy.copy(cerr.upstream, downstream)
+			}
+			return proxy.dialAndCopy(cerr.addr, downstream)
 		}
 
 		if req.Close {

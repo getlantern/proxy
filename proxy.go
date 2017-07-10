@@ -1,17 +1,13 @@
 package proxy
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"io"
-	"io/ioutil"
 	"net"
 	"net/http"
 	"time"
 
 	"github.com/getlantern/golog"
-	"github.com/getlantern/hidden"
 	"github.com/getlantern/proxy/filters"
 )
 
@@ -92,31 +88,7 @@ func (opts *Opts) addIdleKeepAlive(header http.Header) {
 	}
 }
 
-func respondBadGateway(writer io.Writer, req *http.Request, err error) {
+func badGateway(req *http.Request, err error) (*http.Response, error) {
 	log.Debugf("Responding BadGateway: %v", err)
-	respond(writer, req, http.StatusBadGateway, nil, []byte(hidden.Clean(err.Error())))
-}
-
-func respond(writer io.Writer, req *http.Request, statusCode int, header http.Header, body []byte) error {
-	defer func() {
-		if req.Body != nil {
-			if err := req.Body.Close(); err != nil {
-				log.Debugf("Error closing body of request: %s", err)
-			}
-		}
-	}()
-
-	if header == nil {
-		header = make(http.Header)
-	}
-	resp := &http.Response{
-		Header:     header,
-		StatusCode: statusCode,
-		ProtoMajor: 1,
-		ProtoMinor: 1,
-	}
-	if body != nil {
-		resp.Body = ioutil.NopCloser(bytes.NewReader(body))
-	}
-	return resp.Write(writer)
+	return filters.Fail(req, http.StatusBadGateway, err)
 }

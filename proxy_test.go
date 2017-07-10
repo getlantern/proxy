@@ -287,7 +287,11 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 			first = false
 			return filters.Discard(req)
 		}
-		return next(ctx, req)
+		resp, nextErr := next(ctx, req)
+		if resp != nil {
+			resp.Header.Set("X-Test", "true")
+		}
+		return resp, nextErr
 	})
 
 	isConnect := requestMethod == "CONNECT"
@@ -348,6 +352,7 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 	if !discardFirstRequest {
 		log.Debug(resp)
 		assert.Regexp(t, "timeout=\\d+", resp.Header.Get("Keep-Alive"), "All HTTP responses' headers should contain a Keep-Alive timeout")
+		assert.Equal(t, "true", resp.Header.Get("X-Test"))
 	}
 
 	nestedReqBody := []byte("My Request")
@@ -360,6 +365,7 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 	assert.Equal(t, "subdomain2.thehost", body, "Should have gotten right host")
 	if !isConnect {
 		assert.Contains(t, resp.Header.Get("Keep-Alive"), "timeout", "All HTTP responses' headers should contain a Keep-Alive timeout")
+		assert.Equal(t, "true", resp.Header.Get("X-Test"))
 	}
 
 	nestedReq2Body := []byte("My Request")
@@ -372,6 +378,7 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 	assert.Equal(t, "subdomain3.thehost", body, "Should have gotten right host")
 	if !isConnect {
 		assert.Contains(t, resp.Header.Get("Keep-Alive"), "timeout", "All HTTP responses' headers should contain a Keep-Alive timeout")
+		assert.Equal(t, "true", resp.Header.Get("X-Test"))
 	}
 
 	expectedConnections := 3

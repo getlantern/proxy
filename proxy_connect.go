@@ -15,6 +15,15 @@ import (
 	"github.com/getlantern/proxy/filters"
 )
 
+type connectErr struct {
+	addr     string
+	upstream net.Conn
+}
+
+func (err *connectErr) Error() string {
+	return "handling connect!"
+}
+
 // BufferSource is a source for buffers used in reading/writing.
 type BufferSource interface {
 	Get() []byte
@@ -36,31 +45,8 @@ type connectInterceptor struct {
 	okWaitsForUpstream bool
 }
 
-func (proxy *proxy) handleCONNECT(ctx context.Context, downstream net.Conn, req *http.Request) error {
-	resp, err := proxy.Filter.Apply(ctx, req, proxy.nextCONNECT(downstream))
-	if err != nil && resp == nil {
-		resp = proxy.OnError(ctx, req, false, err)
-	}
-	if resp != nil {
-		return proxy.writeResponse(downstream, req, resp)
-	}
-	return err
-}
-
 func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 	return func(ctx context.Context, modifiedReq *http.Request) (*http.Response, error) {
-		var upstream net.Conn
-		closeUpstream := false
-		defer func() {
-			if closeUpstream {
-				if closeErr := upstream.Close(); closeErr != nil {
-					log.Tracef("Error closing upstream connection: %s", closeErr)
-				}
-			}
-		}()
-
-		var err error
-
 		if !proxy.OKWaitsForUpstream {
 			// We preemptively respond with an OK on the client. Some user agents like
 			// Chrome consider any non-200 OK response from the proxy to indicate that
@@ -72,24 +58,24 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 			// (mostly correctly) attribute that to a problem with the origin rather
 			// than the proxy and continue to consider the proxy good. See the extensive
 			// discussion here: https://github.com/getlantern/lantern/issues/5514.
-			err = proxy.respondOK(downstream, modifiedReq)
-			if err != nil {
-				return nil, err
-			}
+			resp, _ := filters.ShortCircuit(modifiedReq, &http.Response{
+				StatusCode: http.StatusOK,
+			})
+			return resp, &connectErr{addr: modifiedReq.URL.Host}
 		}
 
 		// Note - for CONNECT requests, we use the Host from the request URL, not the
 		// Host header. See discussion here:
 		// https://ask.wireshark.org/questions/22988/http-host-header-with-and-without-port-number
-		if upstream, err = proxy.Dial(true, "tcp", modifiedReq.URL.Host); err != nil {
+		upstream, err := proxy.Dial(true, "tcp", modifiedReq.URL.Host)
+		if err != nil {
 			if proxy.OKWaitsForUpstream {
-				respondBadGateway(downstream, modifiedReq, err)
+				return badGateway(modifiedReq, err)
 			} else {
 				log.Error(err)
 			}
 			return nil, err
 		}
-		closeUpstream = true
 
 		if proxy.OKWaitsForUpstream {
 			// In this case, we're waiting to successfully dial upstream before
@@ -98,17 +84,31 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 			// server just in case that one is able to reach the origin. This is
 			// relevant, for example, if some proxy servers reside in jurisdictions
 			// where an origin site is blocked but other proxy servers don't.
-			err = proxy.respondOK(downstream, modifiedReq)
-			if err != nil {
-				return nil, err
-			}
+			resp, _ := filters.ShortCircuit(modifiedReq, &http.Response{
+				StatusCode: http.StatusOK,
+			})
+			return resp, &connectErr{upstream: upstream}
 		}
 
-		return nil, proxy.copy(upstream, downstream)
+		return nil, &connectErr{upstream: upstream}
 	}
 }
 
+func (proxy *proxy) dialAndCopy(addr string, downstream net.Conn) error {
+	upstream, err := proxy.Dial(true, "tcp", addr)
+	if err != nil {
+		return err
+	}
+	return proxy.copy(upstream, downstream)
+}
+
 func (proxy *proxy) copy(upstream, downstream net.Conn) error {
+	defer func() {
+		if closeErr := upstream.Close(); closeErr != nil {
+			log.Tracef("Error closing upstream connection: %s", closeErr)
+		}
+	}()
+
 	// Pipe data between the client and the proxy.
 	bufOut := proxy.BufferSource.Get()
 	bufIn := proxy.BufferSource.Get()
@@ -123,16 +123,6 @@ func (proxy *proxy) copy(upstream, downstream net.Conn) error {
 		return errors.New("Error piping data to downstream: %v", readErr)
 	} else if writeErr != nil && writeErr != idletiming.ErrIdled {
 		return errors.New("Error piping data to upstream: %v", writeErr)
-	}
-	return nil
-}
-
-func (proxy *proxy) respondOK(writer io.Writer, req *http.Request) error {
-	err := respond(writer, req, http.StatusOK, proxy.idleKeepAliveHeader(), nil)
-	if err != nil {
-		fullErr := errors.New("Unable to respond OK: ", err)
-		log.Error(fullErr)
-		return fullErr
 	}
 	return nil
 }
