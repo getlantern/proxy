@@ -175,11 +175,11 @@ func (proxy *proxy) writeResponse(downstream io.Writer, req *http.Request, resp 
 		resp.Request = req
 	}
 	out := downstream
-	if resp.Request == nil {
+	if resp.ProtoMajor == 0 {
 		resp.ProtoMajor = 1
 		resp.ProtoMinor = 1
 	}
-	belowHTTP11 := resp.Request != nil && !resp.Request.ProtoAtLeast(1, 1)
+	belowHTTP11 := !resp.ProtoAtLeast(1, 1)
 	if belowHTTP11 && resp.StatusCode < 200 {
 		// HTTP 1.0 doesn't define status codes below 200, discard response
 		// see http://coad.measurement-factory.com/cgi-bin/coad/SpecCgi?spec_id=rfc2616#excerpt/rfc2616/859a092cb26bde76c25284196171c94d

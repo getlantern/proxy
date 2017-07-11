@@ -27,10 +27,12 @@ type Next func(ctx context.Context, req *http.Request) (*http.Response, error)
 
 // ShortCircuit is a convenience method for creating short-circuiting responses.
 func ShortCircuit(req *http.Request, resp *http.Response) (*http.Response, error) {
-	resp.Request = req
 	if resp.Header == nil {
 		resp.Header = make(http.Header)
 	}
+	resp.Proto = req.Proto
+	resp.ProtoMajor = req.ProtoMajor
+	resp.ProtoMinor = req.ProtoMinor
 	return resp, nil
 }
 
@@ -38,7 +40,9 @@ func ShortCircuit(req *http.Request, resp *http.Response) (*http.Response, error
 // description populated from error.
 func Fail(req *http.Request, statusCode int, err error) (*http.Response, error) {
 	resp := &http.Response{
-		Request:    req,
+		Proto:      req.Proto,
+		ProtoMajor: req.ProtoMajor,
+		ProtoMinor: req.ProtoMinor,
 		StatusCode: statusCode,
 		Header:     make(http.Header),
 		Body:       ioutil.NopCloser(strings.NewReader(err.Error())),
