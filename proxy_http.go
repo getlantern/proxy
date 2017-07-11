@@ -18,9 +18,10 @@ import (
 type contextKey string
 
 const (
-	ctxKeyDownstream         = contextKey("downstream")
-	ctxKeyDownstreamBuffered = contextKey("downstreamBuffered")
-	ctxKeyRequestNumber      = contextKey("requestNumber")
+	ctxKeyDownstream    = contextKey("downstream")
+	ctxKeyRequestNumber = contextKey("requestNumber")
+	ctxKeyUpstream      = contextKey("upstream")
+	ctxKeyUpstreamAddr  = contextKey("upstreamAddr")
 )
 
 // DownstreamConn retrieves the downstream connection from the given Context.
@@ -28,17 +29,27 @@ func DownstreamConn(ctx context.Context) net.Conn {
 	return ctx.Value(ctxKeyDownstream).(net.Conn)
 }
 
-// DownstreamBuffered retrieves the downstream buffered reader from the given
-// Context.
-func DownstreamBuffered(ctx context.Context) *bufio.Reader {
-	return ctx.Value(ctxKeyDownstreamBuffered).(*bufio.Reader)
-}
-
 // RequestNumber indicates how many requests have been received on the current
 // connection. The RequestNumber for the first request is 1, for the second is 2
 // and so forth.
 func RequestNumber(ctx context.Context) int {
 	return ctx.Value(ctxKeyRequestNumber).(int)
+}
+
+func upstreamConn(ctx context.Context) net.Conn {
+	upstream := ctx.Value(ctxKeyUpstream)
+	if upstream == nil {
+		return nil
+	}
+	return upstream.(net.Conn)
+}
+
+func upstreamAddr(ctx context.Context) string {
+	upstreamAddr := ctx.Value(ctxKeyUpstreamAddr)
+	if upstreamAddr == nil {
+		return ""
+	}
+	return upstreamAddr.(string)
 }
 
 func (opts *Opts) applyHTTPDefaults() {
@@ -50,12 +61,12 @@ func (opts *Opts) applyHTTPDefaults() {
 		opts.OnError = defaultOnError
 	}
 	if opts.IdleTimeout > 0 {
-		opts.Filter = filters.Join(filters.FilterFunc(func(ctx context.Context, req *http.Request, next filters.Next) (*http.Response, error) {
-			resp, err := next(ctx, req)
+		opts.Filter = filters.Join(filters.FilterFunc(func(ctx context.Context, req *http.Request, next filters.Next) (*http.Response, context.Context, error) {
+			resp, nextCtx, err := next(ctx, req)
 			if resp != nil {
 				opts.addIdleKeepAlive(resp.Header)
 			}
-			return resp, err
+			return resp, nextCtx, err
 		}), opts.Filter)
 	}
 }
@@ -70,7 +81,6 @@ func (proxy *proxy) Handle(ctx context.Context, downstream net.Conn) error {
 
 	downstreamBuffered := bufio.NewReader(downstream)
 	ctx = context.WithValue(ctx, ctxKeyDownstream, downstream)
-	ctx = context.WithValue(ctx, ctxKeyDownstreamBuffered, downstreamBuffered)
 	ctx = context.WithValue(ctx, ctxKeyRequestNumber, 1)
 
 	// Read initial request
@@ -104,8 +114,9 @@ func (proxy *proxy) Handle(ctx context.Context, downstream net.Conn) error {
 		}
 
 		defer tr.CloseIdleConnections()
-		next = func(ctx context.Context, modifiedReq *http.Request) (*http.Response, error) {
-			return tr.RoundTrip(prepareRequest(modifiedReq))
+		next = func(ctx context.Context, modifiedReq *http.Request) (*http.Response, context.Context, error) {
+			resp, err := tr.RoundTrip(prepareRequest(modifiedReq))
+			return resp, ctx, err
 		}
 	}
 
@@ -114,11 +125,12 @@ func (proxy *proxy) Handle(ctx context.Context, downstream net.Conn) error {
 
 func (proxy *proxy) processRequests(ctx context.Context, remoteAddr string, req *http.Request, downstream net.Conn, downstreamBuffered *bufio.Reader, next filters.Next) error {
 	var readErr error
+	var resp *http.Response
+	var err error
 
 	for {
-		resp, err := proxy.Filter.Apply(ctx, req, next)
-		cerr, isConnect := err.(*connectErr)
-		if err != nil && resp == nil && !isConnect {
+		resp, ctx, err = proxy.Filter.Apply(ctx, req, next)
+		if err != nil && resp == nil {
 			resp = proxy.OnError(ctx, req, false, err)
 		}
 
@@ -133,11 +145,15 @@ func (proxy *proxy) processRequests(ctx context.Context, remoteAddr string, req 
 			}
 		}
 
+		upstream := upstreamConn(ctx)
+		upstreamAddr := upstreamAddr(ctx)
+		isConnect := upstream != nil || upstreamAddr != ""
+
 		if isConnect {
-			if cerr.upstream != nil {
-				return proxy.copy(cerr.upstream, downstream)
+			if upstream != nil {
+				return proxy.copy(upstream, downstream)
 			}
-			return proxy.dialAndCopy(cerr.addr, downstream)
+			return proxy.dialAndCopy(upstreamAddr, downstream)
 		}
 
 		if req.Close {
@@ -303,7 +319,7 @@ func isUnexpected(err error) bool {
 	return !strings.HasSuffix(text, "EOF") && !strings.Contains(text, "use of closed network connection") && !strings.Contains(text, "Use of idled network connection") && !strings.Contains(text, "broken pipe")
 }
 
-func defaultFilter(ctx context.Context, req *http.Request, next filters.Next) (*http.Response, error) {
+func defaultFilter(ctx context.Context, req *http.Request, next filters.Next) (*http.Response, context.Context, error) {
 	return next(ctx, req)
 }
 

@@ -10,35 +10,35 @@ import (
 
 // Filter supports intercepting and modifying http requests and responses
 type Filter interface {
-	Apply(ctx context.Context, req *http.Request, next Next) (*http.Response, error)
+	Apply(ctx context.Context, req *http.Request, next Next) (*http.Response, context.Context, error)
 }
 
 // FilterFunc adapts a function to a Filter
-type FilterFunc func(ctx context.Context, req *http.Request, next Next) (*http.Response, error)
+type FilterFunc func(ctx context.Context, req *http.Request, next Next) (*http.Response, context.Context, error)
 
 // Apply implements the interface Filter
-func (ff FilterFunc) Apply(ctx context.Context, req *http.Request, next Next) (*http.Response, error) {
+func (ff FilterFunc) Apply(ctx context.Context, req *http.Request, next Next) (*http.Response, context.Context, error) {
 	return ff(ctx, req, next)
 }
 
 // Next is a function that's used to indicate that request processing should
 // continue as usual.
-type Next func(ctx context.Context, req *http.Request) (*http.Response, error)
+type Next func(ctx context.Context, req *http.Request) (*http.Response, context.Context, error)
 
 // ShortCircuit is a convenience method for creating short-circuiting responses.
-func ShortCircuit(req *http.Request, resp *http.Response) (*http.Response, error) {
+func ShortCircuit(ctx context.Context, req *http.Request, resp *http.Response) (*http.Response, context.Context, error) {
 	if resp.Header == nil {
 		resp.Header = make(http.Header)
 	}
 	resp.Proto = req.Proto
 	resp.ProtoMajor = req.ProtoMajor
 	resp.ProtoMinor = req.ProtoMinor
-	return resp, nil
+	return resp, ctx, nil
 }
 
 // Fail fails processing, returning a response with the given status code and
 // description populated from error.
-func Fail(req *http.Request, statusCode int, err error) (*http.Response, error) {
+func Fail(ctx context.Context, req *http.Request, statusCode int, err error) (*http.Response, context.Context, error) {
 	resp := &http.Response{
 		Proto:      req.Proto,
 		ProtoMajor: req.ProtoMajor,
@@ -47,17 +47,17 @@ func Fail(req *http.Request, statusCode int, err error) (*http.Response, error) 
 		Header:     make(http.Header),
 		Body:       ioutil.NopCloser(strings.NewReader(err.Error())),
 	}
-	return resp, err
+	return resp, ctx, err
 }
 
 // Discard discards the given request. Make sure to use this when discarding
 // requests in order to make sure that the request body is read.
-func Discard(req *http.Request) (*http.Response, error) {
+func Discard(ctx context.Context, req *http.Request) (*http.Response, context.Context, error) {
 	if req.Body != nil {
 		io.Copy(ioutil.Discard, req.Body)
 		req.Body.Close()
 	}
-	return nil, nil
+	return nil, ctx, nil
 }
 
 // Chain is a chain of Filters that acts as an http.Handler.
@@ -83,14 +83,14 @@ func (c Chain) Prepend(pre Filter) Chain {
 }
 
 // Apply implements the interface Filter
-func (c Chain) Apply(ctx context.Context, req *http.Request, next Next) (*http.Response, error) {
+func (c Chain) Apply(ctx context.Context, req *http.Request, next Next) (*http.Response, context.Context, error) {
 	return c.apply(ctx, req, next, 0)
 }
 
-func (c Chain) apply(ctx context.Context, req *http.Request, next Next, idx int) (*http.Response, error) {
+func (c Chain) apply(ctx context.Context, req *http.Request, next Next, idx int) (*http.Response, context.Context, error) {
 	_next := next
 	if idx < len(c)-1 {
-		_next = func(ctx context.Context, req *http.Request) (*http.Response, error) {
+		_next = func(ctx context.Context, req *http.Request) (*http.Response, context.Context, error) {
 			return c.apply(ctx, req, next, idx+1)
 		}
 	}

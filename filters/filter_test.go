@@ -26,15 +26,15 @@ func doTestFilterChain(t *testing.T, shortCircuit bool) {
 
 	req, _ := http.NewRequest(http.MethodGet, "http://example.com", nil)
 	calledFinalNext := false
-	finalNext := func(ctx context.Context, req *http.Request) (*http.Response, error) {
+	finalNext := func(ctx context.Context, req *http.Request) (*http.Response, context.Context, error) {
 		calledFinalNext = true
 		return &http.Response{
 			Request:    req,
 			Header:     make(http.Header),
 			StatusCode: http.StatusConflict,
-		}, sampleErr
+		}, ctx, sampleErr
 	}
-	resp, err := chain.Apply(context.Background(), req, finalNext)
+	resp, _, err := chain.Apply(context.Background(), req, finalNext)
 	expectedErr := sampleErr
 	if shortCircuit {
 		expectedErr = nil
@@ -60,19 +60,19 @@ type testFilter struct {
 	value string
 }
 
-func (f *testFilter) Apply(ctx context.Context, req *http.Request, next Next) (*http.Response, error) {
+func (f *testFilter) Apply(ctx context.Context, req *http.Request, next Next) (*http.Response, context.Context, error) {
 	if f.key == "" {
 		// short circuit
-		return ShortCircuit(req, &http.Response{
+		return ShortCircuit(ctx, req, &http.Response{
 			Request:    req,
 			StatusCode: http.StatusMovedPermanently,
 		})
 	}
 	req.Header.Add("In-Order", f.key)
 	req.Header.Set(f.key, f.value)
-	resp, err := next(ctx, req)
+	resp, ctx, err := next(ctx, req)
 	if resp != nil {
 		resp.Header.Add("Out-Order", f.key)
 	}
-	return resp, err
+	return resp, ctx, err
 }

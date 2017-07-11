@@ -72,7 +72,7 @@ func New(opts *Opts) Proxy {
 // OnFirstOnly returns a filter that applies the given filter only on the first
 // request on a given connection.
 func OnFirstOnly(filter filters.Filter) filters.Filter {
-	return filters.FilterFunc(func(ctx context.Context, req *http.Request, next filters.Next) (*http.Response, error) {
+	return filters.FilterFunc(func(ctx context.Context, req *http.Request, next filters.Next) (*http.Response, context.Context, error) {
 		requestNumber := RequestNumber(ctx)
 		if requestNumber == 1 {
 			return filter.Apply(ctx, req, next)

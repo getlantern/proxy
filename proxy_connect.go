@@ -15,15 +15,6 @@ import (
 	"github.com/getlantern/proxy/filters"
 )
 
-type connectErr struct {
-	addr     string
-	upstream net.Conn
-}
-
-func (err *connectErr) Error() string {
-	return "handling connect!"
-}
-
 // BufferSource is a source for buffers used in reading/writing.
 type BufferSource interface {
 	Get() []byte
@@ -46,7 +37,7 @@ type connectInterceptor struct {
 }
 
 func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
-	return func(ctx context.Context, modifiedReq *http.Request) (*http.Response, error) {
+	return func(ctx context.Context, modifiedReq *http.Request) (*http.Response, context.Context, error) {
 		if !proxy.OKWaitsForUpstream {
 			// We preemptively respond with an OK on the client. Some user agents like
 			// Chrome consider any non-200 OK response from the proxy to indicate that
@@ -58,10 +49,11 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 			// (mostly correctly) attribute that to a problem with the origin rather
 			// than the proxy and continue to consider the proxy good. See the extensive
 			// discussion here: https://github.com/getlantern/lantern/issues/5514.
-			resp, _ := filters.ShortCircuit(modifiedReq, &http.Response{
+			resp, nextCtx, _ := filters.ShortCircuit(ctx, modifiedReq, &http.Response{
 				StatusCode: http.StatusOK,
 			})
-			return resp, &connectErr{addr: modifiedReq.URL.Host}
+			nextCtx = context.WithValue(nextCtx, ctxKeyUpstreamAddr, modifiedReq.URL.Host)
+			return resp, nextCtx, nil
 		}
 
 		// Note - for CONNECT requests, we use the Host from the request URL, not the
@@ -70,26 +62,23 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 		upstream, err := proxy.Dial(true, "tcp", modifiedReq.URL.Host)
 		if err != nil {
 			if proxy.OKWaitsForUpstream {
-				return badGateway(modifiedReq, err)
+				return badGateway(ctx, modifiedReq, err)
 			}
 			log.Error(err)
-			return nil, err
+			return nil, ctx, err
 		}
 
-		if proxy.OKWaitsForUpstream {
-			// In this case, we're waiting to successfully dial upstream before
-			// responding OK. Lantern uses this logic on server-side proxies so that the
-			// Lantern client retains the opportunity to fail over to a different proxy
-			// server just in case that one is able to reach the origin. This is
-			// relevant, for example, if some proxy servers reside in jurisdictions
-			// where an origin site is blocked but other proxy servers don't.
-			resp, _ := filters.ShortCircuit(modifiedReq, &http.Response{
-				StatusCode: http.StatusOK,
-			})
-			return resp, &connectErr{upstream: upstream}
-		}
-
-		return nil, &connectErr{upstream: upstream}
+		// In this case, waited to successfully dial upstream before responding
+		// OK. Lantern uses this logic on server-side proxies so that the Lantern
+		// client retains the opportunity to fail over to a different proxy server
+		// just in case that one is able to reach the origin. This is relevant,
+		// for example, if some proxy servers reside in jurisdictions where an
+		// origin site is blocked but other proxy servers don't.
+		resp, nextCtx, _ := filters.ShortCircuit(ctx, modifiedReq, &http.Response{
+			StatusCode: http.StatusOK,
+		})
+		nextCtx = context.WithValue(nextCtx, ctxKeyUpstream, upstream)
+		return resp, nextCtx, nil
 	}
 }
 
@@ -132,9 +121,9 @@ func (proxy *proxy) idleKeepAliveHeader() http.Header {
 	return header
 }
 
-func badGateway(req *http.Request, err error) (*http.Response, error) {
+func badGateway(ctx context.Context, req *http.Request, err error) (*http.Response, context.Context, error) {
 	log.Debugf("Responding BadGateway: %v", err)
-	return filters.Fail(req, http.StatusBadGateway, err)
+	return filters.Fail(ctx, req, http.StatusBadGateway, err)
 }
 
 type defaultBufferSource struct{}
