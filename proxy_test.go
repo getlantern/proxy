@@ -35,7 +35,7 @@ func TestDialFailureHTTP(t *testing.T) {
 	}
 	p := New(&Opts{
 		OnError: onError,
-		Dial: func(isConnect bool, net, addr string) (net.Conn, error) {
+		Dial: func(context context.Context, isConnect bool, net, addr string) (net.Conn, error) {
 			return d.Dial(net, addr)
 		},
 	})
@@ -61,7 +61,7 @@ func TestDialFailureCONNECTWaitForUpstream(t *testing.T) {
 	d := mockconn.FailingDialer(errors.New(errorText))
 	p := New(&Opts{
 		OKWaitsForUpstream: true,
-		Dial: func(isConnect bool, net, addr string) (net.Conn, error) {
+		Dial: func(ctx context.Context, isConnect bool, net, addr string) (net.Conn, error) {
 			return d.Dial(net, addr)
 		},
 	})
@@ -87,7 +87,7 @@ func TestDialFailureCONNECTDontWaitForUpstream(t *testing.T) {
 	d := mockconn.FailingDialer(errors.New(errorText))
 	p := New(&Opts{
 		OKWaitsForUpstream: false,
-		Dial: func(isConnect bool, net, addr string) (net.Conn, error) {
+		Dial: func(ctx context.Context, isConnect bool, net, addr string) (net.Conn, error) {
 			return d.Dial(net, addr)
 		},
 	})
@@ -187,7 +187,7 @@ func TestHTTPDownstreamError(t *testing.T) {
 
 	p := New(&Opts{
 		IdleTimeout: 30 * time.Second,
-		Dial: func(isConnect bool, network, addr string) (net.Conn, error) {
+		Dial: func(ctx context.Context, isConnect bool, network, addr string) (net.Conn, error) {
 			return net.Dial("tcp", origin.Listener.Addr().String())
 		},
 	})
@@ -274,7 +274,7 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 		w.Write([]byte(req.Host))
 	}))
 
-	dial := func(isConnect bool, network, addr string) (net.Conn, error) {
+	dial := func(ctx context.Context, isConnect bool, network, addr string) (net.Conn, error) {
 		return net.Dial("tcp", l.Addr().String())
 	}
 

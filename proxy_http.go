@@ -68,7 +68,7 @@ func (proxy *proxy) Handle(ctx context.Context, downstream net.Conn) error {
 	} else {
 		tr := &http.Transport{
 			DialContext: func(ctx context.Context, net, addr string) (net.Conn, error) {
-				return proxy.Dial(false, net, addr)
+				return proxy.Dial(ctx, false, net, addr)
 			},
 			IdleConnTimeout: proxy.IdleTimeout,
 			// since we have one transport per downstream connection, we don't need
@@ -116,7 +116,7 @@ func (proxy *proxy) processRequests(ctx filters.Context, remoteAddr string, req 
 			if upstream != nil {
 				return proxy.copy(upstream, downstream)
 			}
-			return proxy.dialAndCopy(upstreamAddr, downstream)
+			return proxy.dialAndCopy(ctx, upstreamAddr, downstream)
 		}
 
 		if req.Close {

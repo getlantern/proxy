@@ -58,7 +58,7 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 		// Note - for CONNECT requests, we use the Host from the request URL, not the
 		// Host header. See discussion here:
 		// https://ask.wireshark.org/questions/22988/http-host-header-with-and-without-port-number
-		upstream, err := proxy.Dial(true, "tcp", modifiedReq.URL.Host)
+		upstream, err := proxy.Dial(ctx, true, "tcp", modifiedReq.URL.Host)
 		if err != nil {
 			if proxy.OKWaitsForUpstream {
 				return badGateway(ctx, modifiedReq, err)
@@ -81,8 +81,8 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 	}
 }
 
-func (proxy *proxy) dialAndCopy(addr string, downstream net.Conn) error {
-	upstream, err := proxy.Dial(true, "tcp", addr)
+func (proxy *proxy) dialAndCopy(ctx filters.Context, addr string, downstream net.Conn) error {
+	upstream, err := proxy.Dial(ctx, true, "tcp", addr)
 	if err != nil {
 		return err
 	}

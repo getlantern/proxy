@@ -16,7 +16,7 @@ var (
 )
 
 // DialFunc is the dial function to use for dialing the proxy.
-type DialFunc func(isCONNECT bool, network, addr string) (conn net.Conn, err error)
+type DialFunc func(ctx context.Context, isCONNECT bool, network, addr string) (conn net.Conn, err error)
 
 // Proxy is a proxy that can handle HTTP(S) traffic
 type Proxy interface {
@@ -60,8 +60,13 @@ type proxy struct {
 // New creates a new Proxy configured with the specified Opts.
 func New(opts *Opts) Proxy {
 	if opts.Dial == nil {
-		opts.Dial = func(isCONNECT bool, network, addr string) (conn net.Conn, err error) {
-			return net.DialTimeout(network, addr, 30*time.Second)
+		opts.Dial = func(ctx context.Context, isCONNECT bool, network, addr string) (conn net.Conn, err error) {
+			timeout := 30 * time.Second
+			deadline, hasDeadline := ctx.Deadline()
+			if hasDeadline {
+				timeout = deadline.Sub(time.Now())
+			}
+			return net.DialTimeout(network, addr, timeout)
 		}
 	}
 	opts.applyHTTPDefaults()
