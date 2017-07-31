@@ -1,7 +1,6 @@
 package proxy
 
 import (
-	"context"
 	"io"
 	"net"
 	"net/http"
@@ -37,7 +36,7 @@ type connectInterceptor struct {
 }
 
 func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
-	return func(ctx context.Context, modifiedReq *http.Request) (*http.Response, context.Context, error) {
+	return func(ctx filters.Context, modifiedReq *http.Request) (*http.Response, filters.Context, error) {
 		if !proxy.OKWaitsForUpstream {
 			// We preemptively respond with an OK on the client. Some user agents like
 			// Chrome consider any non-200 OK response from the proxy to indicate that
@@ -52,7 +51,7 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 			resp, nextCtx, _ := filters.ShortCircuit(ctx, modifiedReq, &http.Response{
 				StatusCode: http.StatusOK,
 			})
-			nextCtx = context.WithValue(nextCtx, ctxKeyUpstreamAddr, modifiedReq.URL.Host)
+			nextCtx = contextWithValue(nextCtx, ctxKeyUpstreamAddr, modifiedReq.URL.Host)
 			return resp, nextCtx, nil
 		}
 
@@ -77,7 +76,7 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 		resp, nextCtx, _ := filters.ShortCircuit(ctx, modifiedReq, &http.Response{
 			StatusCode: http.StatusOK,
 		})
-		nextCtx = context.WithValue(nextCtx, ctxKeyUpstream, upstream)
+		nextCtx = contextWithValue(nextCtx, ctxKeyUpstream, upstream)
 		return resp, nextCtx, nil
 	}
 }
@@ -121,7 +120,7 @@ func (proxy *proxy) idleKeepAliveHeader() http.Header {
 	return header
 }
 
-func badGateway(ctx context.Context, req *http.Request, err error) (*http.Response, context.Context, error) {
+func badGateway(ctx filters.Context, req *http.Request, err error) (*http.Response, filters.Context, error) {
 	log.Debugf("Responding BadGateway: %v", err)
 	return filters.Fail(ctx, req, http.StatusBadGateway, err)
 }

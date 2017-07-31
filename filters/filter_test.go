@@ -3,6 +3,7 @@ package filters
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"testing"
 
@@ -26,7 +27,7 @@ func doTestFilterChain(t *testing.T, shortCircuit bool) {
 
 	req, _ := http.NewRequest(http.MethodGet, "http://example.com", nil)
 	calledFinalNext := false
-	finalNext := func(ctx context.Context, req *http.Request) (*http.Response, context.Context, error) {
+	finalNext := func(ctx Context, req *http.Request) (*http.Response, Context, error) {
 		calledFinalNext = true
 		return &http.Response{
 			Request:    req,
@@ -34,7 +35,7 @@ func doTestFilterChain(t *testing.T, shortCircuit bool) {
 			StatusCode: http.StatusConflict,
 		}, ctx, sampleErr
 	}
-	resp, _, err := chain.Apply(context.Background(), req, finalNext)
+	resp, _, err := chain.Apply(&testContext{context.Background()}, req, finalNext)
 	expectedErr := sampleErr
 	if shortCircuit {
 		expectedErr = nil
@@ -60,7 +61,7 @@ type testFilter struct {
 	value string
 }
 
-func (f *testFilter) Apply(ctx context.Context, req *http.Request, next Next) (*http.Response, context.Context, error) {
+func (f *testFilter) Apply(ctx Context, req *http.Request, next Next) (*http.Response, Context, error) {
 	if f.key == "" {
 		// short circuit
 		return ShortCircuit(ctx, req, &http.Response{
@@ -75,4 +76,16 @@ func (f *testFilter) Apply(ctx context.Context, req *http.Request, next Next) (*
 		resp.Header.Add("Out-Order", f.key)
 	}
 	return resp, ctx, err
+}
+
+type testContext struct {
+	context.Context
+}
+
+func (ctx *testContext) DownstreamConn() net.Conn {
+	return nil
+}
+
+func (ctx *testContext) RequestNumber() int {
+	return 1
 }

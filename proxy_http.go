@@ -15,43 +15,6 @@ import (
 	"github.com/getlantern/proxy/filters"
 )
 
-type contextKey string
-
-const (
-	ctxKeyDownstream    = contextKey("downstream")
-	ctxKeyRequestNumber = contextKey("requestNumber")
-	ctxKeyUpstream      = contextKey("upstream")
-	ctxKeyUpstreamAddr  = contextKey("upstreamAddr")
-)
-
-// DownstreamConn retrieves the downstream connection from the given Context.
-func DownstreamConn(ctx context.Context) net.Conn {
-	return ctx.Value(ctxKeyDownstream).(net.Conn)
-}
-
-// RequestNumber indicates how many requests have been received on the current
-// connection. The RequestNumber for the first request is 1, for the second is 2
-// and so forth.
-func RequestNumber(ctx context.Context) int {
-	return ctx.Value(ctxKeyRequestNumber).(int)
-}
-
-func upstreamConn(ctx context.Context) net.Conn {
-	upstream := ctx.Value(ctxKeyUpstream)
-	if upstream == nil {
-		return nil
-	}
-	return upstream.(net.Conn)
-}
-
-func upstreamAddr(ctx context.Context) string {
-	upstreamAddr := ctx.Value(ctxKeyUpstreamAddr)
-	if upstreamAddr == nil {
-		return ""
-	}
-	return upstreamAddr.(string)
-}
-
 func (opts *Opts) applyHTTPDefaults() {
 	// Apply defaults
 	if opts.Filter == nil {
@@ -61,7 +24,7 @@ func (opts *Opts) applyHTTPDefaults() {
 		opts.OnError = defaultOnError
 	}
 	if opts.IdleTimeout > 0 {
-		opts.Filter = filters.Join(filters.FilterFunc(func(ctx context.Context, req *http.Request, next filters.Next) (*http.Response, context.Context, error) {
+		opts.Filter = filters.Join(filters.FilterFunc(func(ctx filters.Context, req *http.Request, next filters.Next) (*http.Response, filters.Context, error) {
 			resp, nextCtx, err := next(ctx, req)
 			if resp != nil {
 				opts.addIdleKeepAlive(resp.Header)
@@ -80,8 +43,8 @@ func (proxy *proxy) Handle(ctx context.Context, downstream net.Conn) error {
 	}()
 
 	downstreamBuffered := bufio.NewReader(downstream)
-	ctx = context.WithValue(ctx, ctxKeyDownstream, downstream)
-	ctx = context.WithValue(ctx, ctxKeyRequestNumber, 1)
+	fctx := contextWithValue(ctx, ctxKeyDownstream, downstream)
+	fctx = contextWithValue(fctx, ctxKeyRequestNumber, 1)
 
 	// Read initial request
 	req, err := http.ReadRequest(downstreamBuffered)
@@ -92,7 +55,7 @@ func (proxy *proxy) Handle(ctx context.Context, downstream net.Conn) error {
 		}
 	}
 	if err != nil {
-		errResp := proxy.OnError(ctx, req, true, err)
+		errResp := proxy.OnError(fctx, req, true, err)
 		if errResp != nil {
 			proxy.writeResponse(downstream, req, errResp)
 		}
@@ -114,16 +77,16 @@ func (proxy *proxy) Handle(ctx context.Context, downstream net.Conn) error {
 		}
 
 		defer tr.CloseIdleConnections()
-		next = func(ctx context.Context, modifiedReq *http.Request) (*http.Response, context.Context, error) {
+		next = func(ctx filters.Context, modifiedReq *http.Request) (*http.Response, filters.Context, error) {
 			resp, err := tr.RoundTrip(prepareRequest(modifiedReq))
 			return resp, ctx, err
 		}
 	}
 
-	return proxy.processRequests(ctx, req.RemoteAddr, req, downstream, downstreamBuffered, next)
+	return proxy.processRequests(fctx, req.RemoteAddr, req, downstream, downstreamBuffered, next)
 }
 
-func (proxy *proxy) processRequests(ctx context.Context, remoteAddr string, req *http.Request, downstream net.Conn, downstreamBuffered *bufio.Reader, next filters.Next) error {
+func (proxy *proxy) processRequests(ctx filters.Context, remoteAddr string, req *http.Request, downstream net.Conn, downstreamBuffered *bufio.Reader, next filters.Next) error {
 	var readErr error
 	var resp *http.Response
 	var err error
@@ -182,7 +145,7 @@ func (proxy *proxy) processRequests(ctx context.Context, remoteAddr string, req 
 
 		// Preserve remote address from original request
 		req.RemoteAddr = remoteAddr
-		ctx = context.WithValue(ctx, ctxKeyRequestNumber, RequestNumber(ctx)+1)
+		ctx = contextWithValue(ctx, ctxKeyRequestNumber, ctx.RequestNumber()+1)
 	}
 }
 
@@ -319,10 +282,10 @@ func isUnexpected(err error) bool {
 	return !strings.HasSuffix(text, "EOF") && !strings.Contains(text, "use of closed network connection") && !strings.Contains(text, "Use of idled network connection") && !strings.Contains(text, "broken pipe")
 }
 
-func defaultFilter(ctx context.Context, req *http.Request, next filters.Next) (*http.Response, context.Context, error) {
+func defaultFilter(ctx filters.Context, req *http.Request, next filters.Next) (*http.Response, filters.Context, error) {
 	return next(ctx, req)
 }
 
-func defaultOnError(ctx context.Context, req *http.Request, read bool, err error) *http.Response {
+func defaultOnError(ctx filters.Context, req *http.Request, read bool, err error) *http.Response {
 	return nil
 }

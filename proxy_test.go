@@ -27,7 +27,7 @@ const (
 func TestDialFailureHTTP(t *testing.T) {
 	errorText := "I don't want to dial"
 	d := mockconn.FailingDialer(errors.New(errorText))
-	onError := func(ctx context.Context, req *http.Request, read bool, err error) *http.Response {
+	onError := func(ctx filters.Context, req *http.Request, read bool, err error) *http.Response {
 		return &http.Response{
 			StatusCode: http.StatusBadGateway,
 			Body:       ioutil.NopCloser(bytes.NewReader([]byte(err.Error()))),
@@ -105,7 +105,7 @@ func TestDialFailureCONNECTDontWaitForUpstream(t *testing.T) {
 
 func TestShortCircuitHTTP(t *testing.T) {
 	p := New(&Opts{
-		Filter: filters.FilterFunc(func(ctx context.Context, req *http.Request, next filters.Next) (*http.Response, context.Context, error) {
+		Filter: filters.FilterFunc(func(ctx filters.Context, req *http.Request, next filters.Next) (*http.Response, filters.Context, error) {
 			return filters.ShortCircuit(ctx, req, &http.Response{
 				Header:     make(http.Header),
 				StatusCode: http.StatusForbidden,
@@ -126,7 +126,7 @@ func TestShortCircuitHTTP(t *testing.T) {
 
 func TestShortCircuitCONNECT(t *testing.T) {
 	p := New(&Opts{
-		Filter: filters.FilterFunc(func(ctx context.Context, req *http.Request, next filters.Next) (*http.Response, context.Context, error) {
+		Filter: filters.FilterFunc(func(ctx filters.Context, req *http.Request, next filters.Next) (*http.Response, filters.Context, error) {
 			return filters.ShortCircuit(ctx, req, &http.Response{
 				Header:     make(http.Header),
 				StatusCode: http.StatusForbidden,
@@ -279,7 +279,7 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 	}
 
 	first := true
-	filter := filters.FilterFunc(func(ctx context.Context, req *http.Request, next filters.Next) (*http.Response, context.Context, error) {
+	filter := filters.FilterFunc(func(ctx filters.Context, req *http.Request, next filters.Next) (*http.Response, filters.Context, error) {
 		if req.RemoteAddr == "" {
 			t.Fatal("Request missing RemoteAddr!")
 		}

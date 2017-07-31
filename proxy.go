@@ -43,7 +43,7 @@ type Opts struct {
 	// in the event that there's an error round-tripping upstream. If the function
 	// returns no response, nothing is written to the client. Read indicates
 	// whether the error occurred on reading a request or not. (HTTP only)
-	OnError func(ctx context.Context, req *http.Request, read bool, err error) *http.Response
+	OnError func(ctx filters.Context, req *http.Request, read bool, err error) *http.Response
 
 	// OKWaitsForUpstream specifies whether or not to wait on dialing upstream
 	// before responding OK to a CONNECT request (CONNECT only).
@@ -72,8 +72,8 @@ func New(opts *Opts) Proxy {
 // OnFirstOnly returns a filter that applies the given filter only on the first
 // request on a given connection.
 func OnFirstOnly(filter filters.Filter) filters.Filter {
-	return filters.FilterFunc(func(ctx context.Context, req *http.Request, next filters.Next) (*http.Response, context.Context, error) {
-		requestNumber := RequestNumber(ctx)
+	return filters.FilterFunc(func(ctx filters.Context, req *http.Request, next filters.Next) (*http.Response, filters.Context, error) {
+		requestNumber := ctx.RequestNumber()
 		if requestNumber == 1 {
 			return filter.Apply(ctx, req, next)
 		}
