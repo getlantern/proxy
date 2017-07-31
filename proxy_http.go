@@ -250,7 +250,7 @@ func copyHeadersForForwarding(dst, src http.Header) {
 			// section 14.10 of rfc2616
 			// the slice is short typically, don't bother sort it to speed up lookup
 			extraHopByHopHeaders = vv
-		// case "Keep-Alive":
+		case "Keep-Alive":
 		case "Proxy-Authenticate":
 		case "Proxy-Authorization":
 		case "TE":
