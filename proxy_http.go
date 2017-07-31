@@ -43,8 +43,7 @@ func (proxy *proxy) Handle(ctx context.Context, downstream net.Conn) error {
 	}()
 
 	downstreamBuffered := bufio.NewReader(downstream)
-	fctx := contextWithValue(ctx, ctxKeyDownstream, downstream)
-	fctx = contextWithValue(fctx, ctxKeyRequestNumber, 1)
+	fctx := filters.WrapContext(ctx, downstream)
 
 	// Read initial request
 	req, err := http.ReadRequest(downstreamBuffered)
@@ -145,7 +144,7 @@ func (proxy *proxy) processRequests(ctx filters.Context, remoteAddr string, req 
 
 		// Preserve remote address from original request
 		req.RemoteAddr = remoteAddr
-		ctx = contextWithValue(ctx, ctxKeyRequestNumber, ctx.RequestNumber()+1)
+		ctx = ctx.IncrementRequestNumber()
 	}
 }
 

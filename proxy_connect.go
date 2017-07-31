@@ -51,7 +51,7 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 			resp, nextCtx, _ := filters.ShortCircuit(ctx, modifiedReq, &http.Response{
 				StatusCode: http.StatusOK,
 			})
-			nextCtx = contextWithValue(nextCtx, ctxKeyUpstreamAddr, modifiedReq.URL.Host)
+			nextCtx = nextCtx.WithValue(ctxKeyUpstreamAddr, modifiedReq.URL.Host)
 			return resp, nextCtx, nil
 		}
 
@@ -76,7 +76,7 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 		resp, nextCtx, _ := filters.ShortCircuit(ctx, modifiedReq, &http.Response{
 			StatusCode: http.StatusOK,
 		})
-		nextCtx = contextWithValue(nextCtx, ctxKeyUpstream, upstream)
+		nextCtx = nextCtx.WithValue(ctxKeyUpstream, upstream)
 		return resp, nextCtx, nil
 	}
 }

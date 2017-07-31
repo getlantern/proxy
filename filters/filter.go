@@ -1,27 +1,11 @@
 package filters
 
 import (
-	"context"
 	"io"
 	"io/ioutil"
-	"net"
 	"net/http"
 	"strings"
 )
-
-// Context is a wrapper for Context that exposes some additional
-// information specific to its use in proxies.
-type Context interface {
-	context.Context
-
-	// DownstreamConn retrieves the downstream connection from the given Context.
-	DownstreamConn() net.Conn
-
-	// RequestNumber indicates how many requests have been received on the current
-	// connection. The RequestNumber for the first request is 1, for the second is 2
-	// and so forth.
-	RequestNumber() int
-}
 
 // Filter supports intercepting and modifying http requests and responses
 type Filter interface {

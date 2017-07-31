@@ -1,9 +1,7 @@
 package filters
 
 import (
-	"context"
 	"errors"
-	"net"
 	"net/http"
 	"testing"
 
@@ -48,7 +46,7 @@ func doTestFilterChain(t *testing.T, shortCircuit bool) {
 			StatusCode: http.StatusConflict,
 		}, ctx, sampleErr
 	}
-	resp, _, err := chain.Apply(&testContext{context.Background()}, req, finalNext)
+	resp, _, err := chain.Apply(BackgroundContext(), req, finalNext)
 	expectedErr := sampleErr
 	if shortCircuit {
 		expectedErr = nil
@@ -89,16 +87,4 @@ func (f *testFilter) Apply(ctx Context, req *http.Request, next Next) (*http.Res
 		resp.Header.Add("Out-Order", f.key)
 	}
 	return resp, ctx, err
-}
-
-type testContext struct {
-	context.Context
-}
-
-func (ctx *testContext) DownstreamConn() net.Conn {
-	return nil
-}
-
-func (ctx *testContext) RequestNumber() int {
-	return 1
 }
