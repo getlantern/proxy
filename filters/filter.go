@@ -103,11 +103,11 @@ func (c Chain) Apply(ctx Context, req *http.Request, next Next) (*http.Response,
 }
 
 func (c Chain) apply(ctx Context, req *http.Request, next Next, idx int) (*http.Response, Context, error) {
-	_next := next
-	if idx < len(c)-1 {
-		_next = func(ctx Context, req *http.Request) (*http.Response, Context, error) {
-			return c.apply(ctx, req, next, idx+1)
-		}
+	if idx == len(c) {
+		return next(ctx, req)
 	}
-	return c[idx].Apply(ctx, req, _next)
+	return c[idx].Apply(ctx, req,
+		func(ctx Context, req *http.Request) (*http.Response, Context, error) {
+			return c.apply(ctx, req, next, idx+1)
+		})
 }

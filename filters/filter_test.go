@@ -18,6 +18,19 @@ func TestFilterChainShortCircuit(t *testing.T) {
 	doTestFilterChain(t, true)
 }
 
+func TestFilterChainEmpty(t *testing.T) {
+	expectedResp := &http.Response{
+		Header: make(http.Header),
+	}
+	expectedResp.Header.Set("X-Hi", "Hello")
+	chain := Join()
+	resp, _, err := chain.Apply(nil, nil, func(ctx Context, req *http.Request) (*http.Response, Context, error) {
+		return expectedResp, ctx, nil
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, expectedResp, resp)
+}
+
 func doTestFilterChain(t *testing.T, shortCircuit bool) {
 	sampleErr := errors.New("Sample Error")
 	chain := Join(&testFilter{"a", "1"}, &testFilter{"b", "2"}).Append(&testFilter{"c", "3"})
