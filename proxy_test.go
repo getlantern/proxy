@@ -3,6 +3,7 @@ package proxy
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io/ioutil"
@@ -14,8 +15,8 @@ import (
 	"time"
 
 	"github.com/getlantern/fdcount"
-	"github.com/getlantern/httptest"
 	"github.com/getlantern/mockconn"
+	"github.com/getlantern/proxy/filters"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -26,26 +27,27 @@ const (
 func TestDialFailureHTTP(t *testing.T) {
 	errorText := "I don't want to dial"
 	d := mockconn.FailingDialer(errors.New(errorText))
-	w := httptest.NewRecorder(nil)
-	onError := func(req *http.Request, err error) *http.Response {
+	onError := func(ctx filters.Context, req *http.Request, read bool, err error) *http.Response {
 		return &http.Response{
 			StatusCode: http.StatusBadGateway,
 			Body:       ioutil.NopCloser(bytes.NewReader([]byte(err.Error()))),
 		}
 	}
-	h := HTTP(false, 0, nil, nil, onError, func(net, addr string) (net.Conn, error) {
-		return d.Dial(net, addr)
+	p := New(&Opts{
+		OnError: onError,
+		Dial: func(context context.Context, isConnect bool, net, addr string) (net.Conn, error) {
+			return d.Dial(net, addr)
+		},
 	})
 	req, _ := http.NewRequest("GET", "http://thehost:123", nil)
-	err := h(w, req)
-	if !assert.Error(t, err, "Should have gotten error") {
+	resp, roundTripErr, handleErr := roundTrip(p, req)
+	if !assert.NoError(t, roundTripErr) {
+		return
+	}
+	if !assert.Error(t, handleErr, "Should have gotten error") {
 		return
 	}
 	assert.Equal(t, "thehost:123", d.LastDialed(), "Should have used specified port of 123")
-	resp, err := http.ReadResponse(bufio.NewReader(w.Body()), req)
-	if !assert.NoError(t, err) {
-		return
-	}
 	assert.Equal(t, http.StatusBadGateway, resp.StatusCode)
 	body, err := ioutil.ReadAll(resp.Body)
 	if !assert.NoError(t, err) {
@@ -57,20 +59,21 @@ func TestDialFailureHTTP(t *testing.T) {
 func TestDialFailureCONNECTWaitForUpstream(t *testing.T) {
 	errorText := "I don't want to dial"
 	d := mockconn.FailingDialer(errors.New(errorText))
-	w := httptest.NewRecorder(nil)
-	h := CONNECT(0, nil, true, func(net, addr string) (net.Conn, error) {
-		return d.Dial(net, addr)
+	p := New(&Opts{
+		OKWaitsForUpstream: true,
+		Dial: func(ctx context.Context, isConnect bool, net, addr string) (net.Conn, error) {
+			return d.Dial(net, addr)
+		},
 	})
 	req, _ := http.NewRequest("CONNECT", "http://thehost:123", nil)
-	err := h(w, req)
-	if !assert.Error(t, err, "Should have gotten error") {
+	resp, roundTripErr, handleErr := roundTrip(p, req)
+	if !assert.NoError(t, roundTripErr) {
+		return
+	}
+	if !assert.Error(t, handleErr, "Should have gotten error") {
 		return
 	}
 	assert.Equal(t, "thehost:123", d.LastDialed(), "Should have used specified port of 123")
-	resp, err := http.ReadResponse(bufio.NewReader(w.Body()), req)
-	if !assert.NoError(t, err) {
-		return
-	}
 	assert.Equal(t, http.StatusBadGateway, resp.StatusCode)
 	body, err := ioutil.ReadAll(resp.Body)
 	if !assert.NoError(t, err) {
@@ -82,21 +85,63 @@ func TestDialFailureCONNECTWaitForUpstream(t *testing.T) {
 func TestDialFailureCONNECTDontWaitForUpstream(t *testing.T) {
 	errorText := "I don't want to dial"
 	d := mockconn.FailingDialer(errors.New(errorText))
-	w := httptest.NewRecorder(nil)
-	h := CONNECT(0, nil, false, func(net, addr string) (net.Conn, error) {
-		return d.Dial(net, addr)
+	p := New(&Opts{
+		OKWaitsForUpstream: false,
+		Dial: func(ctx context.Context, isConnect bool, net, addr string) (net.Conn, error) {
+			return d.Dial(net, addr)
+		},
 	})
 	req, _ := http.NewRequest("CONNECT", "http://thehost:123", nil)
-	err := h(w, req)
-	if !assert.Error(t, err, "Should have gotten error") {
+	resp, roundTripErr, handleErr := roundTrip(p, req)
+	if !assert.NoError(t, roundTripErr) {
+		return
+	}
+	if !assert.Error(t, handleErr, "Should have gotten error") {
 		return
 	}
 	assert.Equal(t, "thehost:123", d.LastDialed(), "Should have used specified port of 123")
-	resp, err := http.ReadResponse(bufio.NewReader(w.Body()), req)
-	if !assert.NoError(t, err) {
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+func TestShortCircuitHTTP(t *testing.T) {
+	p := New(&Opts{
+		Filter: filters.FilterFunc(func(ctx filters.Context, req *http.Request, next filters.Next) (*http.Response, filters.Context, error) {
+			return filters.ShortCircuit(ctx, req, &http.Response{
+				Header:     make(http.Header),
+				StatusCode: http.StatusForbidden,
+				Close:      true,
+			})
+		}),
+	})
+	req, _ := http.NewRequest(http.MethodGet, "http://thehost:123", nil)
+	resp, roundTripErr, handleErr := roundTrip(p, req)
+	if !assert.NoError(t, roundTripErr) {
 		return
 	}
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	if !assert.NoError(t, handleErr) {
+		return
+	}
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+}
+
+func TestShortCircuitCONNECT(t *testing.T) {
+	p := New(&Opts{
+		Filter: filters.FilterFunc(func(ctx filters.Context, req *http.Request, next filters.Next) (*http.Response, filters.Context, error) {
+			return filters.ShortCircuit(ctx, req, &http.Response{
+				Header:     make(http.Header),
+				StatusCode: http.StatusForbidden,
+			})
+		}),
+	})
+	req, _ := http.NewRequest(http.MethodConnect, "http://thehost:123", nil)
+	resp, roundTripErr, handleErr := roundTrip(p, req)
+	if !assert.NoError(t, roundTripErr) {
+		return
+	}
+	if !assert.NoError(t, handleErr) {
+		return
+	}
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
 }
 
 func TestCONNECTWaitForUpstream(t *testing.T) {
@@ -140,13 +185,29 @@ func TestHTTPDownstreamError(t *testing.T) {
 	}))
 	defer origin.Close()
 
-	intercept := HTTP(false, 30*time.Second, nil, nil, nil, func(network, addr string) (net.Conn, error) {
-		return net.Dial("tcp", origin.Listener.Addr().String())
+	p := New(&Opts{
+		IdleTimeout: 30 * time.Second,
+		Dial: func(ctx context.Context, isConnect bool, network, addr string) (net.Conn, error) {
+			return net.Dial("tcp", origin.Listener.Addr().String())
+		},
 	})
-	proxy := ht.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		intercept(failingHijacker{w}, req)
-	}))
-	defer proxy.Close()
+
+	l, err := net.Listen("tcp", ":0")
+	if !assert.NoError(t, err) {
+		return
+	}
+	defer l.Close()
+
+	go func() {
+		for {
+			conn, acceptErr := l.Accept()
+			if acceptErr != nil {
+				return
+			}
+			conn.Close()
+			go p.Handle(context.Background(), conn)
+		}
+	}()
 
 	_, counter, err := fdcount.Matching("TCP")
 	if !assert.NoError(t, err) {
@@ -160,7 +221,7 @@ func TestHTTPDownstreamError(t *testing.T) {
 	for i := 0; i < n; i++ {
 		go func() {
 			defer wg.Done()
-			conn, err := net.Dial("tcp", proxy.Listener.Addr().String())
+			conn, err := net.Dial("tcp", l.Addr().String())
 			chConnsToClose <- conn
 			if !assert.NoError(t, err) {
 				return
@@ -213,28 +274,35 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 		w.Write([]byte(req.Host))
 	}))
 
-	dial := func(network, addr string) (net.Conn, error) {
+	dial := func(ctx context.Context, isConnect bool, network, addr string) (net.Conn, error) {
 		return net.Dial("tcp", l.Addr().String())
 	}
 
-	onRequest := func(req *http.Request) *http.Request {
+	first := true
+	filter := filters.FilterFunc(func(ctx filters.Context, req *http.Request, next filters.Next) (*http.Response, filters.Context, error) {
 		if req.RemoteAddr == "" {
 			t.Fatal("Request missing RemoteAddr!")
 		}
-		return req
-	}
+		if discardFirstRequest && first {
+			first = false
+			return filters.Discard(ctx, req)
+		}
+		resp, nextCtx, nextErr := next(ctx, req)
+		if resp != nil {
+			resp.Header.Set("X-Test", "true")
+		}
+		return resp, nextCtx, nextErr
+	})
 
 	isConnect := requestMethod == "CONNECT"
-	var intercept Interceptor
-	if isConnect {
-		intercept = CONNECT(30*time.Second, nil, okWaitsForUpstream, dial)
-	} else {
-		intercept = HTTP(discardFirstRequest, 30*time.Second, onRequest, nil, nil, dial)
-	}
+	p := New(&Opts{
+		IdleTimeout:        30 * time.Second,
+		OKWaitsForUpstream: okWaitsForUpstream,
+		Filter:             filter,
+		Dial:               dial,
+	})
 
-	go http.Serve(pl, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		intercept(w, req)
-	}))
+	go p.Serve(pl)
 
 	_, counter, err := fdcount.Matching("TCP")
 	if !assert.NoError(t, err) {
@@ -282,7 +350,9 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 		assert.Equal(t, "subdomain.thehost:756", body, "Should have left port alone")
 	}
 	if !discardFirstRequest {
+		log.Debug(resp)
 		assert.Regexp(t, "timeout=\\d+", resp.Header.Get("Keep-Alive"), "All HTTP responses' headers should contain a Keep-Alive timeout")
+		assert.Equal(t, "true", resp.Header.Get("X-Test"))
 	}
 
 	nestedReqBody := []byte("My Request")
@@ -295,6 +365,7 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 	assert.Equal(t, "subdomain2.thehost", body, "Should have gotten right host")
 	if !isConnect {
 		assert.Contains(t, resp.Header.Get("Keep-Alive"), "timeout", "All HTTP responses' headers should contain a Keep-Alive timeout")
+		assert.Equal(t, "true", resp.Header.Get("X-Test"))
 	}
 
 	nestedReq2Body := []byte("My Request")
@@ -307,6 +378,7 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 	assert.Equal(t, "subdomain3.thehost", body, "Should have gotten right host")
 	if !isConnect {
 		assert.Contains(t, resp.Header.Get("Keep-Alive"), "timeout", "All HTTP responses' headers should contain a Keep-Alive timeout")
+		assert.Equal(t, "true", resp.Header.Get("X-Test"))
 	}
 
 	expectedConnections := 3
@@ -324,14 +396,14 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 	assert.NoError(t, counter.AssertDelta(0), "All connections should have been closed")
 }
 
-func dumpRequest(req *http.Request) string {
-	buf := &bytes.Buffer{}
-	req.Write(buf)
-	return buf.String()
-}
-
-func dumpResponse(resp *http.Response) string {
-	buf := &bytes.Buffer{}
-	resp.Write(buf)
-	return buf.String()
+func roundTrip(p Proxy, req *http.Request) (resp *http.Response, roundTripErr error, handleErr error) {
+	toSend := &bytes.Buffer{}
+	roundTripErr = req.Write(toSend)
+	if roundTripErr != nil {
+		return
+	}
+	received := &bytes.Buffer{}
+	handleErr = p.Handle(context.Background(), mockconn.New(received, toSend))
+	resp, roundTripErr = http.ReadResponse(bufio.NewReader(bytes.NewReader(received.Bytes())), req)
+	return
 }

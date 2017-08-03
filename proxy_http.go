@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bufio"
+	"context"
 	"io"
 	"io/ioutil"
 	"net"
@@ -11,169 +12,158 @@ import (
 	"time"
 
 	"github.com/getlantern/errors"
+	"github.com/getlantern/proxy/filters"
 )
 
-// HTTP returns a Handler that processes plain-text HTTP requests.
-//
-// discardFirstRequest: if true, causes the first request to the handler to be
-// discarded
-//
-// idleTimeout: if specified, lets us know to include an appropriate
-// KeepAlive: timeout header in the CONNECT response
-//
-// onRequest: if specified, is called on every read request
-//
-// onResponse: if specified, is called on every read response
-//
-// onError: if specified, if there's an error making a round trip, this function
-// can return a response to be presented to the client. If the function returns
-// no response, nothing is written to the client.
-//
-// dial: the function that's used to dial upstream
-func HTTP(
-	discardFirstRequest bool,
-	idleTimeout time.Duration,
-	onRequest func(req *http.Request) *http.Request,
-	onResponse func(resp *http.Response) *http.Response,
-	onError func(req *http.Request, err error) *http.Response,
-	dial DialFunc,
-) Interceptor {
+func (opts *Opts) applyHTTPDefaults() {
 	// Apply defaults
-	if onRequest == nil {
-		onRequest = defaultOnRequest
+	if opts.Filter == nil {
+		opts.Filter = filters.FilterFunc(defaultFilter)
 	}
-	if onResponse == nil {
-		onResponse = defaultOnResponse
+	if opts.OnError == nil {
+		opts.OnError = defaultOnError
 	}
-	if onError == nil {
-		onError = defaultOnError
-	}
-	if idleTimeout > 0 {
-		origOnResponse := onResponse
-		onResponse = func(resp *http.Response) *http.Response {
-			resp = origOnResponse(resp)
-			addIdleKeepAlive(resp.Header, idleTimeout)
-			return resp
-		}
-	}
-
-	ic := &httpInterceptor{
-		discardFirstRequest: discardFirstRequest,
-		idleTimeout:         idleTimeout,
-		onRequest:           onRequest,
-		onResponse:          onResponse,
-		onError:             onError,
-		dial:                dial,
-	}
-	return ic.intercept
-}
-
-type httpInterceptor struct {
-	discardFirstRequest bool
-	idleTimeout         time.Duration
-	onRequest           func(req *http.Request) *http.Request
-	onResponse          func(resp *http.Response) *http.Response
-	onError             func(req *http.Request, err error) *http.Response
-	dial                DialFunc
-}
-
-func (ic *httpInterceptor) intercept(w http.ResponseWriter, req *http.Request) error {
-	var downstream net.Conn
-	var downstreamBuffered *bufio.ReadWriter
-	tr := &http.Transport{
-		Dial: func(net, addr string) (net.Conn, error) {
-			return ic.dial(net, addr)
-		},
-		IdleConnTimeout: ic.idleTimeout,
-		// since we have one transport per downstream connection, we don't need
-		// more than this
-		MaxIdleConnsPerHost: 1,
-	}
-	var err error
-
-	closeDownstream := false
-	defer func() {
-		if closeDownstream {
-			if closeErr := downstream.Close(); closeErr != nil {
-				log.Tracef("Error closing downstream connection: %s", closeErr)
+	if opts.IdleTimeout > 0 {
+		opts.Filter = filters.Join(filters.FilterFunc(func(ctx filters.Context, req *http.Request, next filters.Next) (*http.Response, filters.Context, error) {
+			resp, nextCtx, err := next(ctx, req)
+			if resp != nil {
+				opts.addIdleKeepAlive(resp.Header)
 			}
+			return resp, nextCtx, err
+		}), opts.Filter)
+	}
+}
+
+// Handle implements the interface Proxy
+func (proxy *proxy) Handle(ctx context.Context, downstream net.Conn) error {
+	defer func() {
+		if closeErr := downstream.Close(); closeErr != nil {
+			log.Tracef("Error closing downstream connection: %s", closeErr)
 		}
-		tr.CloseIdleConnections()
 	}()
 
-	// Hijack underlying connection.
-	downstream, downstreamBuffered, err = w.(http.Hijacker).Hijack()
-	if err != nil {
-		fullErr := errors.New("Unable to hijack connection: %s", err)
-		respondBadGateway(w, fullErr)
-		return fullErr
-	}
-	closeDownstream = true
+	downstreamBuffered := bufio.NewReader(downstream)
+	fctx := filters.WrapContext(ctx, downstream)
 
-	return ic.processRequests(req.RemoteAddr, req, downstream, downstreamBuffered, tr)
+	// Read initial request
+	req, err := http.ReadRequest(downstreamBuffered)
+	if req != nil {
+		remoteAddr := downstream.RemoteAddr()
+		if remoteAddr != nil {
+			req.RemoteAddr = downstream.RemoteAddr().String()
+		}
+	}
+	if err != nil {
+		errResp := proxy.OnError(fctx, req, true, err)
+		if errResp != nil {
+			proxy.writeResponse(downstream, req, errResp)
+		}
+		return err
+	}
+
+	var next filters.Next
+	if req.Method == http.MethodConnect {
+		next = proxy.nextCONNECT(downstream)
+	} else {
+		tr := &http.Transport{
+			DialContext: func(ctx context.Context, net, addr string) (net.Conn, error) {
+				return proxy.Dial(ctx, false, net, addr)
+			},
+			IdleConnTimeout: proxy.IdleTimeout,
+			// since we have one transport per downstream connection, we don't need
+			// more than this
+			MaxIdleConnsPerHost: 1,
+		}
+
+		defer tr.CloseIdleConnections()
+		next = func(ctx filters.Context, modifiedReq *http.Request) (*http.Response, filters.Context, error) {
+			resp, err := tr.RoundTrip(prepareRequest(modifiedReq))
+			return resp, ctx, err
+		}
+	}
+
+	return proxy.processRequests(fctx, req.RemoteAddr, req, downstream, downstreamBuffered, next)
 }
 
-func (ic *httpInterceptor) processRequests(remoteAddr string, req *http.Request, downstream net.Conn, downstreamBuffered *bufio.ReadWriter, tr *http.Transport) error {
+func (proxy *proxy) processRequests(ctx filters.Context, remoteAddr string, req *http.Request, downstream net.Conn, downstreamBuffered *bufio.Reader, next filters.Next) error {
 	var readErr error
+	var resp *http.Response
+	var err error
 
-	first := true
 	for {
-		modifiedReq := ic.onRequest(req)
-		discardRequest := first && ic.discardFirstRequest
-		if discardRequest {
-			err := modifiedReq.Write(ioutil.Discard)
-			if err != nil {
-				return errors.New("Error discarding first request: %v", err)
-			}
-		} else {
-			resp, err := tr.RoundTrip(prepareRequest(modifiedReq))
-			if err != nil {
-				errResp := ic.onError(req, err)
-				if errResp != nil {
-					errResp.Request = req
-					ic.writeResponse(downstream, errResp)
-				}
-				return err
-			}
-			writeErr := ic.writeResponse(downstream, resp)
+		resp, ctx, err = proxy.Filter.Apply(ctx, req, next)
+		if err != nil && resp == nil {
+			resp = proxy.OnError(ctx, req, false, err)
+		}
+
+		if resp != nil {
+			writeErr := proxy.writeResponse(downstream, req, resp)
 			if writeErr != nil {
 				if isUnexpected(writeErr) {
 					return errors.New("Unable to write response to downstream: %v", writeErr)
 				}
 				// Error is not unexpected, but we're done
-				return nil
+				return err
 			}
+		}
+
+		upstream := upstreamConn(ctx)
+		upstreamAddr := upstreamAddr(ctx)
+		isConnect := upstream != nil || upstreamAddr != ""
+
+		if isConnect {
+			if upstream != nil {
+				return proxy.copy(upstream, downstream)
+			}
+			return proxy.dialAndCopy(ctx, upstreamAddr, downstream)
 		}
 
 		if req.Close {
 			// Client signaled that they would close the connection after this
 			// request, finish
-			return nil
+			return err
 		}
 
-		req, readErr = http.ReadRequest(downstreamBuffered.Reader)
+		if err == nil && resp != nil && resp.Close {
+			// Last response, finish
+			return err
+		}
+
+		// read the next request
+		req, readErr = http.ReadRequest(downstreamBuffered)
 		if readErr != nil {
 			if isUnexpected(readErr) {
+				errResp := proxy.OnError(ctx, req, true, readErr)
+				if errResp != nil {
+					proxy.writeResponse(downstream, req, errResp)
+				}
 				return errors.New("Unable to read next request from downstream: %v", readErr)
 			}
-			return nil
+			return err
 		}
 
 		// Preserve remote address from original request
 		req.RemoteAddr = remoteAddr
-		first = false
+		ctx = ctx.IncrementRequestNumber()
 	}
 }
 
-func (ic *httpInterceptor) writeResponse(downstream io.Writer, resp *http.Response) error {
+func (proxy *proxy) writeResponse(downstream io.Writer, req *http.Request, resp *http.Response) error {
+	if resp.Request == nil {
+		resp.Request = req
+	}
 	out := downstream
-	belowHTTP11 := !resp.Request.ProtoAtLeast(1, 1)
+	if resp.ProtoMajor == 0 {
+		resp.ProtoMajor = 1
+		resp.ProtoMinor = 1
+	}
+	belowHTTP11 := !resp.ProtoAtLeast(1, 1)
 	if belowHTTP11 && resp.StatusCode < 200 {
 		// HTTP 1.0 doesn't define status codes below 200, discard response
 		// see http://coad.measurement-factory.com/cgi-bin/coad/SpecCgi?spec_id=rfc2616#excerpt/rfc2616/859a092cb26bde76c25284196171c94d
 		out = ioutil.Discard
 	} else {
-		resp = ic.onResponse(prepareResponse(resp, belowHTTP11))
+		resp = prepareResponse(resp, belowHTTP11)
 	}
 	err := resp.Write(out)
 	// resp.Write closes the body only if it's successfully sent. Close
@@ -291,14 +281,10 @@ func isUnexpected(err error) bool {
 	return !strings.HasSuffix(text, "EOF") && !strings.Contains(text, "use of closed network connection") && !strings.Contains(text, "Use of idled network connection") && !strings.Contains(text, "broken pipe")
 }
 
-func defaultOnRequest(req *http.Request) *http.Request {
-	return req
+func defaultFilter(ctx filters.Context, req *http.Request, next filters.Next) (*http.Response, filters.Context, error) {
+	return next(ctx, req)
 }
 
-func defaultOnResponse(resp *http.Response) *http.Response {
-	return resp
-}
-
-func defaultOnError(req *http.Request, err error) *http.Response {
+func defaultOnError(ctx filters.Context, req *http.Request, read bool, err error) *http.Response {
 	return nil
 }
