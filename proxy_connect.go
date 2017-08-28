@@ -114,12 +114,6 @@ func (proxy *proxy) copy(upstream, downstream net.Conn) error {
 	return nil
 }
 
-func (proxy *proxy) idleKeepAliveHeader() http.Header {
-	header := make(http.Header, 1)
-	proxy.addIdleKeepAlive(header)
-	return header
-}
-
 func badGateway(ctx filters.Context, req *http.Request, err error) (*http.Response, filters.Context, error) {
 	log.Debugf("Responding BadGateway: %v", err)
 	return filters.Fail(ctx, req, http.StatusBadGateway, err)
