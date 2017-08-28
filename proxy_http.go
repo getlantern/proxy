@@ -25,11 +25,7 @@ func (opts *Opts) applyHTTPDefaults() {
 	}
 	if opts.IdleTimeout > 0 {
 		opts.Filter = filters.Join(filters.FilterFunc(func(ctx filters.Context, req *http.Request, next filters.Next) (*http.Response, filters.Context, error) {
-			resp, nextCtx, err := next(ctx, req)
-			if resp != nil {
-				opts.addIdleKeepAlive(resp.Header)
-			}
-			return resp, nextCtx, err
+			return next(ctx, req)
 		}), opts.Filter)
 	}
 }
@@ -164,6 +160,7 @@ func (proxy *proxy) writeResponse(downstream io.Writer, req *http.Request, resp 
 		out = ioutil.Discard
 	} else {
 		resp = prepareResponse(resp, belowHTTP11)
+		proxy.addIdleKeepAlive(resp.Header)
 	}
 	err := resp.Write(out)
 	// resp.Write closes the body only if it's successfully sent. Close
