@@ -73,7 +73,7 @@ func (proxy *proxy) Handle(ctx context.Context, downstream net.Conn) error {
 
 		defer tr.CloseIdleConnections()
 		next = func(ctx filters.Context, modifiedReq *http.Request) (*http.Response, filters.Context, error) {
-			resp, err := tr.RoundTrip(prepareRequest(modifiedReq))
+			resp, err := tr.RoundTrip(prepareRequest(modifiedReq.WithContext(ctx)))
 			return resp, ctx, err
 		}
 	}
@@ -139,8 +139,9 @@ func (proxy *proxy) processRequests(ctx filters.Context, remoteAddr string, req 
 		}
 
 		// Preserve remote address from original request
-		req.RemoteAddr = remoteAddr
 		ctx = ctx.IncrementRequestNumber()
+		req.RemoteAddr = remoteAddr
+		req = req.WithContext(ctx)
 	}
 }
 

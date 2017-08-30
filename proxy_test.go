@@ -274,7 +274,9 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 		w.Write([]byte(req.Host))
 	}))
 
+	requestNumber := 0
 	dial := func(ctx context.Context, isConnect bool, network, addr string) (net.Conn, error) {
+		requestNumber = ctx.(filters.Context).RequestNumber()
 		return net.Dial("tcp", l.Addr().String())
 	}
 
@@ -342,6 +344,10 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 	req.RemoteAddr = "remoteaddr:134"
 
 	includeFirst := isConnect || !discardFirstRequest
+	expectedRequestNumber := 0
+	if includeFirst {
+		expectedRequestNumber = 1
+	}
 	resp, body, err := roundTrip(req, includeFirst)
 	if !assert.NoError(t, err) {
 		return
@@ -353,6 +359,10 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 		log.Debug(resp)
 		assert.Regexp(t, "timeout=\\d+", resp.Header.Get("Keep-Alive"), "All HTTP responses' headers should contain a Keep-Alive timeout")
 		assert.Equal(t, "true", resp.Header.Get("X-Test"))
+	}
+	assert.Equal(t, expectedRequestNumber, requestNumber)
+	if !includeFirst {
+		expectedRequestNumber++
 	}
 
 	nestedReqBody := []byte("My Request")
@@ -366,7 +376,9 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 	if !isConnect {
 		assert.Contains(t, resp.Header.Get("Keep-Alive"), "timeout", "All HTTP responses' headers should contain a Keep-Alive timeout")
 		assert.Equal(t, "true", resp.Header.Get("X-Test"))
+		expectedRequestNumber++
 	}
+	assert.Equal(t, expectedRequestNumber, requestNumber)
 
 	nestedReq2Body := []byte("My Request")
 	nestedReq2, _ := http.NewRequest("POST", "http://subdomain3.thehost/b", ioutil.NopCloser(bytes.NewBuffer(nestedReq2Body)))
@@ -379,7 +391,9 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 	if !isConnect {
 		assert.Contains(t, resp.Header.Get("Keep-Alive"), "timeout", "All HTTP responses' headers should contain a Keep-Alive timeout")
 		assert.Equal(t, "true", resp.Header.Get("X-Test"))
+		expectedRequestNumber++
 	}
+	assert.Equal(t, expectedRequestNumber, requestNumber)
 
 	expectedConnections := 3
 	if discardFirstRequest {
