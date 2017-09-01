@@ -174,42 +174,39 @@ func (proxy *proxy) writeResponse(downstream io.Writer, req *http.Request, resp 
 
 // prepareRequest prepares the request in line with the HTTP spec for proxies.
 func prepareRequest(req *http.Request) *http.Request {
-	outReq := new(http.Request)
-	// Beware, this will make a shallow copy. We have to copy all maps
-	*outReq = *req
-
-	outReq.Proto = "HTTP/1.1"
-	outReq.ProtoMajor = 1
-	outReq.ProtoMinor = 1
+	req.Proto = "HTTP/1.1"
+	req.ProtoMajor = 1
+	req.ProtoMinor = 1
 	// Overwrite close flag: keep persistent connection for the backend servers
-	outReq.Close = false
+	req.Close = false
 
 	// Request Header
-	outReq.Header = make(http.Header)
-	copyHeadersForForwarding(outReq.Header, req.Header)
+	newHeader := make(http.Header)
+	copyHeadersForForwarding(newHeader, req.Header)
 	// Ensure we have a HOST header (important for Go 1.6+ because http.Server
 	// strips the HOST header from the inbound request)
-	outReq.Header.Set("Host", req.Host)
+	newHeader.Set("Host", req.Host)
+	req.Header = newHeader
 
 	// Request URL
-	outReq.URL = cloneURL(req.URL)
+	req.URL = cloneURL(req.URL)
 	// We know that is going to be HTTP always because HTTPS isn't forwarded.
 	// We need to hardcode it here because req.URL.Scheme can be undefined, since
 	// client request don't need to use absolute URIs
-	outReq.URL.Scheme = "http"
+	req.URL.Scheme = "http"
 	// We need to make sure the host is defined in the URL (not the actual URI)
-	outReq.URL.Host = req.Host
-	outReq.URL.RawQuery = req.URL.RawQuery
-	outReq.Body = req.Body
+	req.URL.Host = req.Host
+	req.URL.RawQuery = req.URL.RawQuery
+	req.Body = req.Body
 
 	userAgent := req.UserAgent()
 	if userAgent == "" {
-		outReq.Header.Del("User-Agent")
+		req.Header.Del("User-Agent")
 	} else {
-		outReq.Header.Set("User-Agent", userAgent)
+		req.Header.Set("User-Agent", userAgent)
 	}
 
-	return outReq
+	return req
 }
 
 // prepareResponse prepares the response in line with the HTTP spec
