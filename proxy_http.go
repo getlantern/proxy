@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/getlantern/errors"
+	"github.com/getlantern/idletiming"
 	"github.com/getlantern/proxy/filters"
 )
 
@@ -50,11 +51,14 @@ func (proxy *proxy) Handle(ctx context.Context, downstream net.Conn) error {
 		}
 	}
 	if err != nil {
-		errResp := proxy.OnError(fctx, req, true, err)
-		if errResp != nil {
-			proxy.writeResponse(downstream, req, errResp)
+		if isUnexpected(err) {
+			errResp := proxy.OnError(fctx, req, true, err)
+			if errResp != nil {
+				proxy.writeResponse(downstream, req, errResp)
+			}
+			return errors.New("Error in initial ReadRequest: %v", err)
 		}
-		return err
+		return nil
 	}
 
 	var next filters.Next
@@ -272,8 +276,27 @@ func contains(k string, s []string) bool {
 }
 
 func isUnexpected(err error) bool {
+	if err == nil {
+		return false
+	}
+	if err == io.EOF {
+		return false
+	}
+	// This is okay per the HTTP spec.
+	// See https://www.w3.org/Protocols/rfc2616/rfc2616-sec8.html#sec8.1.4
+	if err == idletiming.ErrIdled {
+		return false
+	}
+
 	text := err.Error()
-	return !strings.HasSuffix(text, "EOF") && !strings.Contains(text, "use of closed network connection") && !strings.Contains(text, "Use of idled network connection") && !strings.Contains(text, "broken pipe")
+	return !strings.HasSuffix(text, "EOF") &&
+		!strings.Contains(text, "i/o timeout") &&
+		!strings.Contains(text, "Use of idled network connection") &&
+		!strings.Contains(text, "use of closed network connection") &&
+		// usually caused by client disconnecting
+		!strings.Contains(text, "broken pipe") &&
+		// usually caused by client disconnecting
+		!strings.Contains(text, "connection reset by peer")
 }
 
 func defaultFilter(ctx filters.Context, req *http.Request, next filters.Next) (*http.Response, filters.Context, error) {

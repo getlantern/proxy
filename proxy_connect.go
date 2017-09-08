@@ -1,14 +1,11 @@
 package proxy
 
 import (
-	"io"
 	"net"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/getlantern/errors"
-	"github.com/getlantern/idletiming"
 	"github.com/getlantern/lampshade"
 	"github.com/getlantern/netx"
 	"github.com/getlantern/proxy/filters"
@@ -102,13 +99,9 @@ func (proxy *proxy) copy(upstream, downstream net.Conn) error {
 	defer proxy.BufferSource.Put(bufOut)
 	defer proxy.BufferSource.Put(bufIn)
 	writeErr, readErr := netx.BidiCopy(upstream, downstream, bufOut, bufIn)
-	// Note - we ignore idled errors because these are okay per the HTTP spec.
-	// See https://www.w3.org/Protocols/rfc2616/rfc2616-sec8.html#sec8.1.4
-	// We also ignore "broken pipe" errors on piping to downstream because they're
-	// usually caused by the client disconnecting and we don't worry about that.
-	if readErr != nil && readErr != io.EOF && !strings.Contains(readErr.Error(), "broken pipe") {
+	if isUnexpected(readErr) {
 		return errors.New("Error piping data to downstream: %v", readErr)
-	} else if writeErr != nil && writeErr != idletiming.ErrIdled {
+	} else if isUnexpected(writeErr) {
 		return errors.New("Error piping data to upstream: %v", writeErr)
 	}
 	return nil
