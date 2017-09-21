@@ -104,7 +104,15 @@ func TestDialFailureCONNECTDontWaitForUpstream(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
 
-func TestConnect(t *testing.T) {
+func TestConnectWaitForUpstream(t *testing.T) {
+	doTestConnect(t, true)
+}
+
+func TestConnectDontWaitForUpstream(t *testing.T) {
+	doTestConnect(t, true)
+}
+
+func doTestConnect(t *testing.T, okWaitsForUpstream bool) {
 	successText := "I'm good!"
 	originalOrigin := "origin:80"
 	expectedOrigin := "origin:8080"
@@ -112,6 +120,7 @@ func TestConnect(t *testing.T) {
 	var mx sync.Mutex
 	d := mockconn.SucceedingDialer([]byte(successText))
 	p := New(&Opts{
+		OKWaitsForUpstream: okWaitsForUpstream,
 		Dial: func(ctx context.Context, isConnect bool, net, addr string) (net.Conn, error) {
 			mx.Lock()
 			receivedOrigin = addr
