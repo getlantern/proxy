@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"time"
@@ -10,7 +11,6 @@ import (
 	"github.com/getlantern/errors"
 	"github.com/getlantern/lampshade"
 	"github.com/getlantern/netx"
-	"github.com/getlantern/preconn"
 	"github.com/getlantern/proxy/filters"
 )
 
@@ -95,9 +95,9 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 	}
 }
 
-func (proxy *proxy) Connect(ctx context.Context, conn net.Conn, origin string) error {
-	pconn := preconn.Wrap(conn, []byte(fmt.Sprintf(connectRequest, origin, origin)))
-	return proxy.Handle(context.WithValue(ctx, contextKeyNoRespondOkay, "true"), pconn)
+func (proxy *proxy) Connect(ctx context.Context, in io.Reader, conn net.Conn, origin string) error {
+	pin := newPreReader(in, []byte(fmt.Sprintf(connectRequest, origin, origin)))
+	return proxy.Handle(context.WithValue(ctx, contextKeyNoRespondOkay, "true"), pin, conn)
 }
 
 func (proxy *proxy) dialAndCopy(ctx filters.Context, addr string, downstream net.Conn) error {
