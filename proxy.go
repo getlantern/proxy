@@ -23,6 +23,10 @@ type Proxy interface {
 	// Handle handles a single connection
 	Handle(ctx context.Context, conn net.Conn) error
 
+	// Connect opens a CONNECT tunnel to the origin without requiring a CONNECT
+	// request to first be sent on conn. It will not reply with CONNECT OK.
+	Connect(ctx context.Context, conn net.Conn, origin string) error
+
 	// Serve runs a server on the given Listener
 	Serve(l net.Listener) error
 }

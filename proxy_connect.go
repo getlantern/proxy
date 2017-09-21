@@ -1,6 +1,8 @@
 package proxy
 
 import (
+	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"time"
@@ -8,7 +10,14 @@ import (
 	"github.com/getlantern/errors"
 	"github.com/getlantern/lampshade"
 	"github.com/getlantern/netx"
+	"github.com/getlantern/preconn"
 	"github.com/getlantern/proxy/filters"
+)
+
+const (
+	connectRequest = "CONNECT %v HTTP/1.1\r\nHost: %v\r\n\r\n"
+
+	contextKeyNoRespondOkay = "noRespondOK"
 )
 
 // BufferSource is a source for buffers used in reading/writing.
@@ -34,6 +43,18 @@ type connectInterceptor struct {
 
 func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 	return func(ctx filters.Context, modifiedReq *http.Request) (*http.Response, filters.Context, error) {
+		suppressOK := ctx.Value(contextKeyNoRespondOkay) != nil
+
+		var resp *http.Response
+		nextCtx := ctx
+		respondOK := func() {
+			if !suppressOK {
+				resp, nextCtx, _ = filters.ShortCircuit(ctx, modifiedReq, &http.Response{
+					StatusCode: http.StatusOK,
+				})
+			}
+		}
+
 		if !proxy.OKWaitsForUpstream {
 			// We preemptively respond with an OK on the client. Some user agents like
 			// Chrome consider any non-200 OK response from the proxy to indicate that
@@ -45,9 +66,7 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 			// (mostly correctly) attribute that to a problem with the origin rather
 			// than the proxy and continue to consider the proxy good. See the extensive
 			// discussion here: https://github.com/getlantern/lantern/issues/5514.
-			resp, nextCtx, _ := filters.ShortCircuit(ctx, modifiedReq, &http.Response{
-				StatusCode: http.StatusOK,
-			})
+			respondOK()
 			nextCtx = nextCtx.WithValue(ctxKeyUpstreamAddr, modifiedReq.URL.Host)
 			return resp, nextCtx, nil
 		}
@@ -70,12 +89,15 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 		// just in case that one is able to reach the origin. This is relevant,
 		// for example, if some proxy servers reside in jurisdictions where an
 		// origin site is blocked but other proxy servers don't.
-		resp, nextCtx, _ := filters.ShortCircuit(ctx, modifiedReq, &http.Response{
-			StatusCode: http.StatusOK,
-		})
+		respondOK()
 		nextCtx = nextCtx.WithValue(ctxKeyUpstream, upstream)
 		return resp, nextCtx, nil
 	}
+}
+
+func (proxy *proxy) Connect(ctx context.Context, conn net.Conn, origin string) error {
+	pconn := preconn.Wrap(conn, []byte(fmt.Sprintf(connectRequest, origin, origin)))
+	return proxy.Handle(context.WithValue(ctx, contextKeyNoRespondOkay, "true"), pconn)
 }
 
 func (proxy *proxy) dialAndCopy(ctx filters.Context, addr string, downstream net.Conn) error {
