@@ -34,6 +34,10 @@ func (opts *Opts) applyHTTPDefaults() {
 
 // Handle implements the interface Proxy
 func (proxy *proxy) Handle(ctx context.Context, downstreamIn io.Reader, downstream net.Conn) error {
+	return proxy.handle(ctx, downstreamIn, downstream, nil)
+}
+
+func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstream net.Conn, upstream net.Conn) error {
 	defer func() {
 		if closeErr := downstream.Close(); closeErr != nil {
 			log.Tracef("Error closing downstream connection: %s", closeErr)
@@ -72,14 +76,26 @@ func (proxy *proxy) Handle(ctx context.Context, downstreamIn io.Reader, downstre
 	if req.Method == http.MethodConnect {
 		next = proxy.nextCONNECT(downstream)
 	} else {
-		tr := &http.Transport{
-			DialContext: func(ctx context.Context, net, addr string) (net.Conn, error) {
-				return proxy.Dial(ctx, false, net, addr)
-			},
-			IdleConnTimeout: proxy.IdleTimeout,
-			// since we have one transport per downstream connection, we don't need
-			// more than this
-			MaxIdleConnsPerHost: 1,
+		var tr *http.Transport
+		if upstream != nil {
+			tr = &http.Transport{
+				DialContext: func(ctx context.Context, net, addr string) (net.Conn, error) {
+					// always use the supplied upstream connection, but don't allow it to
+					// be closed by the transport
+					return &noCloseConn{upstream}, nil
+				},
+				MaxIdleConnsPerHost: -1,
+			}
+		} else {
+			tr = &http.Transport{
+				DialContext: func(ctx context.Context, net, addr string) (net.Conn, error) {
+					return proxy.Dial(ctx, false, net, addr)
+				},
+				IdleConnTimeout: proxy.IdleTimeout,
+				// since we have one transport per downstream connection, we don't need
+				// more than this
+				MaxIdleConnsPerHost: 1,
+			}
 		}
 
 		defer tr.CloseIdleConnections()
@@ -125,10 +141,7 @@ func (proxy *proxy) processRequests(ctx filters.Context, remoteAddr string, req 
 		}
 
 		if isConnect {
-			if upstream != nil {
-				return proxy.copy(upstream, downstream)
-			}
-			return proxy.dialAndCopy(ctx, upstreamAddr, downstream)
+			return proxy.proceedWithConnect(ctx, upstreamAddr, upstream, downstream)
 		}
 
 		if req.Close {

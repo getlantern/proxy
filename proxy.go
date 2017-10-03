@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/getlantern/errors"
 	"github.com/getlantern/golog"
+	"github.com/getlantern/mitm"
 	"github.com/getlantern/proxy/filters"
 )
 
@@ -57,14 +59,21 @@ type Opts struct {
 
 	// Dial is the function that's used to dial upstream.
 	Dial DialFunc
+
+	// MITMOpts, if specified, instructs proxy to attempt to man-in-the-middle
+	// connections and handle them as an HTTP proxy. If the connection cannot be
+	// mitm'ed (e.g. Client Hello doesn't include an SNI header) or if the
+	// contents isn't HTTP, the connection is handled as normal without MITM.
+	MITMOpts *mitm.Opts
 }
 
 type proxy struct {
 	*Opts
+	mitmIC *mitm.Interceptor
 }
 
 // New creates a new Proxy configured with the specified Opts.
-func New(opts *Opts) Proxy {
+func New(opts *Opts) (Proxy, error) {
 	if opts.Dial == nil {
 		opts.Dial = func(ctx context.Context, isCONNECT bool, network, addr string) (conn net.Conn, err error) {
 			timeout := 30 * time.Second
@@ -77,7 +86,17 @@ func New(opts *Opts) Proxy {
 	}
 	opts.applyHTTPDefaults()
 	opts.applyCONNECTDefaults()
-	return &proxy{opts}
+
+	p := &proxy{Opts: opts}
+	var mitmErr error
+	if opts.MITMOpts != nil {
+		p.mitmIC, mitmErr = mitm.Configure(opts.MITMOpts)
+		if mitmErr != nil {
+			mitmErr = errors.New("Unable to configure MITM: %v", mitmErr)
+		}
+	}
+
+	return p, mitmErr
 }
 
 // OnFirstOnly returns a filter that applies the given filter only on the first

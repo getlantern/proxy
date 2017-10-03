@@ -1,19 +1,20 @@
 package proxy
 
 import (
+	"context"
 	"net"
-
-	"github.com/getlantern/proxy/filters"
 )
 
 type contextKey string
 
 const (
-	ctxKeyUpstream     = contextKey("upstream")
-	ctxKeyUpstreamAddr = contextKey("upstreamAddr")
+	ctxKeyUpstream      = contextKey("upstream")
+	ctxKeyUpstreamAddr  = contextKey("upstreamAddr")
+	ctxKeyMITMTLSConfig = contextKey("mitmTLSConfig")
+	ctxKeyNoRespondOkay = contextKey("noRespondOK")
 )
 
-func upstreamConn(ctx filters.Context) net.Conn {
+func upstreamConn(ctx context.Context) net.Conn {
 	upstream := ctx.Value(ctxKeyUpstream)
 	if upstream == nil {
 		return nil
@@ -21,7 +22,7 @@ func upstreamConn(ctx filters.Context) net.Conn {
 	return upstream.(net.Conn)
 }
 
-func upstreamAddr(ctx filters.Context) string {
+func upstreamAddr(ctx context.Context) string {
 	upstreamAddr := ctx.Value(ctxKeyUpstreamAddr)
 	if upstreamAddr == nil {
 		return ""

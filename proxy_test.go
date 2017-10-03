@@ -4,26 +4,40 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net"
 	"net/http"
 	ht "net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/getlantern/fdcount"
+	"github.com/getlantern/keyman"
+	"github.com/getlantern/mitm"
 	"github.com/getlantern/mockconn"
 	"github.com/getlantern/proxy/filters"
+	"github.com/getlantern/tlsdefaults"
 	"github.com/stretchr/testify/assert"
 )
 
 const (
 	okHeader = "X-Test-OK"
 )
+
+func init() {
+	// Clean up certs
+	os.Remove("serverpk.pem")
+	os.Remove("servercert.pem")
+	os.Remove("proxypk.pem")
+	os.Remove("proxycert.pem")
+}
 
 func TestDialFailureHTTP(t *testing.T) {
 	errorText := "I don't want to dial"
@@ -34,7 +48,7 @@ func TestDialFailureHTTP(t *testing.T) {
 			Body:       ioutil.NopCloser(bytes.NewReader([]byte(err.Error()))),
 		}
 	}
-	p := New(&Opts{
+	p := newProxy(&Opts{
 		OnError: onError,
 		Dial: func(context context.Context, isConnect bool, net, addr string) (net.Conn, error) {
 			return d.Dial(net, addr)
@@ -60,7 +74,7 @@ func TestDialFailureHTTP(t *testing.T) {
 func TestDialFailureCONNECTWaitForUpstream(t *testing.T) {
 	errorText := "I don't want to dial"
 	d := mockconn.FailingDialer(errors.New(errorText))
-	p := New(&Opts{
+	p := newProxy(&Opts{
 		OKWaitsForUpstream: true,
 		Dial: func(ctx context.Context, isConnect bool, net, addr string) (net.Conn, error) {
 			return d.Dial(net, addr)
@@ -86,7 +100,7 @@ func TestDialFailureCONNECTWaitForUpstream(t *testing.T) {
 func TestDialFailureCONNECTDontWaitForUpstream(t *testing.T) {
 	errorText := "I don't want to dial"
 	d := mockconn.FailingDialer(errors.New(errorText))
-	p := New(&Opts{
+	p := newProxy(&Opts{
 		OKWaitsForUpstream: false,
 		Dial: func(ctx context.Context, isConnect bool, net, addr string) (net.Conn, error) {
 			return d.Dial(net, addr)
@@ -119,7 +133,7 @@ func doTestConnect(t *testing.T, okWaitsForUpstream bool) {
 	receivedOrigin := ""
 	var mx sync.Mutex
 	d := mockconn.SucceedingDialer([]byte(successText))
-	p := New(&Opts{
+	p := newProxy(&Opts{
 		OKWaitsForUpstream: okWaitsForUpstream,
 		Dial: func(ctx context.Context, isConnect bool, net, addr string) (net.Conn, error) {
 			mx.Lock()
@@ -147,7 +161,7 @@ func doTestConnect(t *testing.T, okWaitsForUpstream bool) {
 }
 
 func TestShortCircuitHTTP(t *testing.T) {
-	p := New(&Opts{
+	p := newProxy(&Opts{
 		Filter: filters.FilterFunc(func(ctx filters.Context, req *http.Request, next filters.Next) (*http.Response, filters.Context, error) {
 			return filters.ShortCircuit(ctx, req, &http.Response{
 				Header:     make(http.Header),
@@ -168,7 +182,7 @@ func TestShortCircuitHTTP(t *testing.T) {
 }
 
 func TestShortCircuitCONNECT(t *testing.T) {
-	p := New(&Opts{
+	p := newProxy(&Opts{
 		Filter: filters.FilterFunc(func(ctx filters.Context, req *http.Request, next filters.Next) (*http.Response, filters.Context, error) {
 			return filters.ShortCircuit(ctx, req, &http.Response{
 				Header:     make(http.Header),
@@ -187,20 +201,28 @@ func TestShortCircuitCONNECT(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
 }
 
-func TestCONNECTWaitForUpstream(t *testing.T) {
-	doTest(t, "CONNECT", false, true)
+func TestCONNECTWaitForUpstreamNoMITM(t *testing.T) {
+	doTest(t, "CONNECT", false, true, false)
 }
 
-func TestCONNECTDontWaitForUpstream(t *testing.T) {
-	doTest(t, "CONNECT", false, false)
+func TestCONNECTWaitForUpstreamMITM(t *testing.T) {
+	doTest(t, "CONNECT", false, true, true)
+}
+
+func TestCONNECTDontWaitForUpstreamNoMITM(t *testing.T) {
+	doTest(t, "CONNECT", false, false, false)
+}
+
+func TestCONNECTDontWaitForUpstreamMITM(t *testing.T) {
+	doTest(t, "CONNECT", false, false, true)
 }
 
 func TestHTTPForwardFirst(t *testing.T) {
-	doTest(t, "GET", false, false)
+	doTest(t, "GET", false, false, false)
 }
 
 func TestHTTPDontForwardFirst(t *testing.T) {
-	doTest(t, "GET", true, false)
+	doTest(t, "GET", true, false, false)
 }
 
 type failingConn struct {
@@ -228,7 +250,7 @@ func TestHTTPDownstreamError(t *testing.T) {
 	}))
 	defer origin.Close()
 
-	p := New(&Opts{
+	p := newProxy(&Opts{
 		IdleTimeout: 30 * time.Second,
 		Dial: func(ctx context.Context, isConnect bool, network, addr string) (net.Conn, error) {
 			return net.Dial("tcp", origin.Listener.Addr().String())
@@ -294,12 +316,17 @@ func TestHTTPDownstreamError(t *testing.T) {
 	assert.NoError(t, counter.AssertDelta(0), "All connections should have been closed")
 }
 
-func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWaitsForUpstream bool) {
-	l, err := net.Listen("tcp", "localhost:0")
+func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWaitsForUpstream bool, shouldMITM bool) {
+	l, err := tlsdefaults.Listen("localhost:0", "serverpk.pem", "servercert.pem")
 	if !assert.NoError(t, err) {
 		return
 	}
 	defer l.Close()
+
+	serverCert, err := keyman.LoadCertificateFromFile("servercert.pem")
+	if !assert.NoError(t, err) {
+		return
+	}
 
 	pl, err := net.Listen("tcp", "localhost:0")
 	if !assert.NoError(t, err) {
@@ -320,6 +347,12 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 	requestNumber := 0
 	dial := func(ctx context.Context, isConnect bool, network, addr string) (net.Conn, error) {
 		requestNumber = ctx.(filters.Context).RequestNumber()
+		if requestMethod == http.MethodGet {
+			return tls.Dial("tcp", l.Addr().String(), &tls.Config{
+				ServerName: "localhost",
+				RootCAs:    serverCert.PoolContainingCert(),
+			})
+		}
 		return net.Dial("tcp", l.Addr().String())
 	}
 
@@ -340,11 +373,23 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 	})
 
 	isConnect := requestMethod == "CONNECT"
-	p := New(&Opts{
+	var mitmOpts *mitm.Opts
+	if shouldMITM {
+		mitmOpts = &mitm.Opts{
+			PKFile:   "proxypk.pem",
+			CertFile: "proxycert.pem",
+			ClientTLSConfig: &tls.Config{
+				RootCAs: serverCert.PoolContainingCert(),
+			},
+		}
+	}
+
+	p := newProxy(&Opts{
 		IdleTimeout:        30 * time.Second,
 		OKWaitsForUpstream: okWaitsForUpstream,
 		Filter:             filter,
 		Dial:               dial,
+		MITMOpts:           mitmOpts,
 	})
 
 	go p.Serve(pl)
@@ -371,11 +416,11 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 		}
 		if readResponse {
 			resp, rtErr := http.ReadResponse(br, req)
-			if rtErr != nil {
+			if rtErr != nil && rtErr != io.EOF {
 				return nil, "", rtErr
 			}
 			body, rtErr := ioutil.ReadAll(resp.Body)
-			if rtErr != nil {
+			if rtErr != nil && rtErr != io.EOF {
 				return resp, "", rtErr
 			}
 			return resp, string(body), nil
@@ -399,13 +444,34 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 		assert.Equal(t, "subdomain.thehost:756", body, "Should have left port alone")
 	}
 	if !discardFirstRequest {
-		log.Debug(resp)
 		assert.Regexp(t, "timeout=\\d+", resp.Header.Get("Keep-Alive"), "All HTTP responses' headers should contain a Keep-Alive timeout")
 		assert.Equal(t, "true", resp.Header.Get("X-Test"))
 	}
 	assert.Equal(t, expectedRequestNumber, requestNumber)
 	if !includeFirst {
 		expectedRequestNumber++
+	}
+
+	if isConnect {
+		// Upgrade to TLS
+		var tlsConfig *tls.Config
+		if shouldMITM {
+			proxyCert, err := keyman.LoadCertificateFromFile("proxycert.pem")
+			if !assert.NoError(t, err) {
+				return
+			}
+			tlsConfig = &tls.Config{
+				ServerName: "localhost",
+				RootCAs:    proxyCert.PoolContainingCert(),
+			}
+		} else {
+			tlsConfig = &tls.Config{
+				ServerName: "localhost",
+				RootCAs:    serverCert.PoolContainingCert(),
+			}
+		}
+		conn = tls.Client(conn, tlsConfig)
+		br = bufio.NewReader(conn)
 	}
 
 	nestedReqBody := []byte("My Request")
@@ -451,6 +517,11 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 
 	conn.Close()
 	assert.NoError(t, counter.AssertDelta(0), "All connections should have been closed")
+}
+
+func newProxy(opts *Opts) Proxy {
+	p, _ := New(opts)
+	return p
 }
 
 func roundTrip(p Proxy, req *http.Request) (resp *http.Response, roundTripErr error, handleErr error) {
