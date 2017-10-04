@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/getlantern/errors"
@@ -96,7 +97,7 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 }
 
 func (proxy *proxy) Connect(ctx context.Context, in io.Reader, conn net.Conn, origin string) error {
-	pin := newPreReader(in, []byte(fmt.Sprintf(connectRequest, origin, origin)))
+	pin := io.MultiReader(strings.NewReader(fmt.Sprintf(connectRequest, origin, origin)), in)
 	return proxy.Handle(context.WithValue(ctx, contextKeyNoRespondOkay, "true"), pin, conn)
 }
 

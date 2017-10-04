@@ -213,8 +213,6 @@ func prepareRequest(req *http.Request) *http.Request {
 	req.URL.Scheme = "http"
 	// We need to make sure the host is defined in the URL (not the actual URI)
 	req.URL.Host = req.Host
-	req.URL.RawQuery = req.URL.RawQuery
-	req.Body = req.Body
 
 	userAgent := req.UserAgent()
 	if userAgent == "" {
