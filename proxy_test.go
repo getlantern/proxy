@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	ht "net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -101,6 +102,48 @@ func TestDialFailureCONNECTDontWaitForUpstream(t *testing.T) {
 	}
 	assert.Equal(t, "thehost:123", d.LastDialed(), "Should have used specified port of 123")
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+func TestConnectWaitForUpstream(t *testing.T) {
+	doTestConnect(t, true)
+}
+
+func TestConnectDontWaitForUpstream(t *testing.T) {
+	doTestConnect(t, true)
+}
+
+func doTestConnect(t *testing.T, okWaitsForUpstream bool) {
+	successText := "I'm good!"
+	originalOrigin := "origin:80"
+	expectedOrigin := "origin:8080"
+	receivedOrigin := ""
+	var mx sync.Mutex
+	d := mockconn.SucceedingDialer([]byte(successText))
+	p := New(&Opts{
+		OKWaitsForUpstream: okWaitsForUpstream,
+		Dial: func(ctx context.Context, isConnect bool, net, addr string) (net.Conn, error) {
+			mx.Lock()
+			receivedOrigin = addr
+			mx.Unlock()
+			return d.Dial(net, addr)
+		},
+		Filter: filters.FilterFunc(func(ctx filters.Context, req *http.Request, next filters.Next) (*http.Response, filters.Context, error) {
+			req.Host = req.Host + "80"
+			req.URL.Host = req.Host
+			return next(ctx, req)
+		}),
+	})
+	received := &bytes.Buffer{}
+	conn := mockconn.New(received, strings.NewReader(""))
+	err := p.Connect(context.Background(), conn, conn, originalOrigin)
+	if !assert.NoError(t, err) {
+		return
+	}
+	assert.Equal(t, successText, received.String())
+	mx.Lock()
+	ro := receivedOrigin
+	mx.Unlock()
+	assert.Equal(t, expectedOrigin, ro)
 }
 
 func TestShortCircuitHTTP(t *testing.T) {
@@ -205,7 +248,7 @@ func TestHTTPDownstreamError(t *testing.T) {
 				return
 			}
 			conn.Close()
-			go p.Handle(context.Background(), conn)
+			go p.Handle(context.Background(), conn, conn)
 		}
 	}()
 
@@ -417,7 +460,8 @@ func roundTrip(p Proxy, req *http.Request) (resp *http.Response, roundTripErr er
 		return
 	}
 	received := &bytes.Buffer{}
-	handleErr = p.Handle(context.Background(), mockconn.New(received, toSend))
+	conn := mockconn.New(received, toSend)
+	handleErr = p.Handle(context.Background(), conn, conn)
 	resp, roundTripErr = http.ReadResponse(bufio.NewReader(bytes.NewReader(received.Bytes())), req)
 	return
 }

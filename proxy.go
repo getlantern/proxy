@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"time"
@@ -20,8 +21,13 @@ type DialFunc func(ctx context.Context, isCONNECT bool, network, addr string) (c
 
 // Proxy is a proxy that can handle HTTP(S) traffic
 type Proxy interface {
-	// Handle handles a single connection
-	Handle(ctx context.Context, conn net.Conn) error
+	// Handle handles a single connection, with in specified separately in case
+	// there's a buffered reader or something of that sort in use.
+	Handle(ctx context.Context, in io.Reader, conn net.Conn) error
+
+	// Connect opens a CONNECT tunnel to the origin without requiring a CONNECT
+	// request to first be sent on conn. It will not reply with CONNECT OK.
+	Connect(ctx context.Context, in io.Reader, conn net.Conn, origin string) error
 
 	// Serve runs a server on the given Listener
 	Serve(l net.Listener) error

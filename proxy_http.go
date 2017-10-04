@@ -13,6 +13,7 @@ import (
 
 	"github.com/getlantern/errors"
 	"github.com/getlantern/idletiming"
+	"github.com/getlantern/preconn"
 	"github.com/getlantern/proxy/filters"
 )
 
@@ -32,14 +33,20 @@ func (opts *Opts) applyHTTPDefaults() {
 }
 
 // Handle implements the interface Proxy
-func (proxy *proxy) Handle(ctx context.Context, downstream net.Conn) error {
+func (proxy *proxy) Handle(ctx context.Context, downstreamIn io.Reader, downstream net.Conn) error {
 	defer func() {
 		if closeErr := downstream.Close(); closeErr != nil {
 			log.Tracef("Error closing downstream connection: %s", closeErr)
 		}
 	}()
 
-	downstreamBuffered := bufio.NewReader(downstream)
+	var downstreamBuffered *bufio.Reader
+	switch r := downstreamIn.(type) {
+	case *bufio.Reader:
+		downstreamBuffered = r
+	default:
+		downstreamBuffered = bufio.NewReader(r)
+	}
 	fctx := filters.WrapContext(ctx, downstream)
 
 	// Read initial request
@@ -110,6 +117,12 @@ func (proxy *proxy) processRequests(ctx filters.Context, remoteAddr string, req 
 		upstream := upstreamConn(ctx)
 		upstreamAddr := upstreamAddr(ctx)
 		isConnect := upstream != nil || upstreamAddr != ""
+
+		buffered := downstreamBuffered.Buffered()
+		if buffered > 0 {
+			b, _ := downstreamBuffered.Peek(buffered)
+			downstream = preconn.Wrap(downstream, b)
+		}
 
 		if isConnect {
 			if upstream != nil {
@@ -200,8 +213,6 @@ func prepareRequest(req *http.Request) *http.Request {
 	req.URL.Scheme = "http"
 	// We need to make sure the host is defined in the URL (not the actual URI)
 	req.URL.Host = req.Host
-	req.URL.RawQuery = req.URL.RawQuery
-	req.Body = req.Body
 
 	userAgent := req.UserAgent()
 	if userAgent == "" {
