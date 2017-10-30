@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/getlantern/errors"
-	"github.com/getlantern/idletiming"
 	"github.com/getlantern/preconn"
 	"github.com/getlantern/proxy/filters"
 )
@@ -308,7 +307,7 @@ func isUnexpected(err error) bool {
 	}
 	// This is okay per the HTTP spec.
 	// See https://www.w3.org/Protocols/rfc2616/rfc2616-sec8.html#sec8.1.4
-	if err == idletiming.ErrIdled {
+	if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 		return false
 	}
 

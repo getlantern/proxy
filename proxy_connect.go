@@ -21,7 +21,7 @@ import (
 const (
 	connectRequest = "CONNECT %v HTTP/1.1\r\nHost: %v\r\n\r\n"
 
-	maxHTTPSize = 2 << 15 // 65K
+	maxHTTPSize = 2 << 15 // 64K
 )
 
 // BufferSource is a source for buffers used in reading/writing.
