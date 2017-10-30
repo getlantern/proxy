@@ -123,7 +123,7 @@ func TestConnectWaitForUpstream(t *testing.T) {
 }
 
 func TestConnectDontWaitForUpstream(t *testing.T) {
-	doTestConnect(t, true)
+	doTestConnect(t, false)
 }
 
 func doTestConnect(t *testing.T, okWaitsForUpstream bool) {

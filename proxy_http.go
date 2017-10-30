@@ -43,13 +43,7 @@ func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstre
 		}
 	}()
 
-	var downstreamBuffered *bufio.Reader
-	switch r := downstreamIn.(type) {
-	case *bufio.Reader:
-		downstreamBuffered = r
-	default:
-		downstreamBuffered = bufio.NewReader(r)
-	}
+	downstreamBuffered := bufio.NewReader(downstreamIn)
 	fctx := filters.WrapContext(ctx, downstream)
 
 	// Read initial request
@@ -83,6 +77,9 @@ func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstre
 					// be closed by the transport
 					return &noCloseConn{upstream}, nil
 				},
+				// this transport is only used once, don't keep any idle connections,
+				// however still allow the transport to close the connection after using
+				// it
 				MaxIdleConnsPerHost: -1,
 			}
 		} else {

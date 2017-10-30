@@ -3,7 +3,6 @@ package proxy
 import (
 	"bufio"
 	"context"
-	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
@@ -47,17 +46,8 @@ type connectInterceptor struct {
 
 func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 	return func(ctx filters.Context, modifiedReq *http.Request) (*http.Response, filters.Context, error) {
-		suppressOK := ctx.Value(ctxKeyNoRespondOkay) != nil
-
 		var resp *http.Response
 		nextCtx := ctx.WithValue(ctxKeyUpstreamAddr, modifiedReq.URL.Host)
-		respondOK := func() {
-			if !suppressOK {
-				resp, nextCtx, _ = filters.ShortCircuit(nextCtx, modifiedReq, &http.Response{
-					StatusCode: http.StatusOK,
-				})
-			}
-		}
 
 		if !proxy.OKWaitsForUpstream {
 			// We preemptively respond with an OK on the client. Some user agents like
@@ -70,7 +60,7 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 			// (mostly correctly) attribute that to a problem with the origin rather
 			// than the proxy and continue to consider the proxy good. See the extensive
 			// discussion here: https://github.com/getlantern/lantern/issues/5514.
-			respondOK()
+			resp, nextCtx = respondOK(resp, modifiedReq, nextCtx)
 			return resp, nextCtx, nil
 		}
 
@@ -92,10 +82,20 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 		// just in case that one is able to reach the origin. This is relevant,
 		// for example, if some proxy servers reside in jurisdictions where an
 		// origin site is blocked but other proxy servers don't.
-		respondOK()
+		resp, nextCtx = respondOK(resp, modifiedReq, nextCtx)
 		nextCtx = nextCtx.WithValue(ctxKeyUpstream, upstream)
 		return resp, nextCtx, nil
 	}
+}
+
+func respondOK(resp *http.Response, req *http.Request, ctx filters.Context) (*http.Response, filters.Context) {
+	suppressOK := ctx.Value(ctxKeyNoRespondOkay) != nil
+	if !suppressOK {
+		resp, ctx, _ = filters.ShortCircuit(ctx, req, &http.Response{
+			StatusCode: http.StatusOK,
+		})
+	}
+	return resp, ctx
 }
 
 func (proxy *proxy) Connect(ctx context.Context, in io.Reader, conn net.Conn, origin string) error {
@@ -128,20 +128,11 @@ func (proxy *proxy) proceedWithConnect(ctx filters.Context, upstreamAddr string,
 		downstream = downstreamMITM
 		upstream = upstreamMITM
 		if mitming {
-			handshakeErr := upstream.(*tls.Conn).Handshake()
-			if handshakeErr != nil {
-				log.Errorf("HandshakeErr: %v", handshakeErr)
-				return handshakeErr
-			}
-		}
-
-		if mitming {
 			// Try to read HTTP request and process as HTTP assuming that requests
 			// (not including body) are always smaller than 65K. If this assumption is
 			// violated, we won't be able to process the data on this connection.
 			downstreamRR := reconn.Wrap(downstream, maxHTTPSize)
-			downstreamRRBuf := bufio.NewReadWriter(bufio.NewReader(downstreamRR), bufio.NewWriter(downstreamRR))
-			_, peekReqErr := http.ReadRequest(downstreamRRBuf.Reader)
+			_, peekReqErr := http.ReadRequest(bufio.NewReader(downstreamRR))
 			var rrErr error
 			rr, rrErr = downstreamRR.Rereader()
 			if rrErr != nil {
