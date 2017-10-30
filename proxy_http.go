@@ -53,6 +53,10 @@ func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstre
 		if remoteAddr != nil {
 			req.RemoteAddr = downstream.RemoteAddr().String()
 		}
+		if OrigHost(ctx) == "" {
+			log.Debugf("Setting orig host to: %v", req.Host)
+			fctx = fctx.WithValue(ctxKeyOrigHost, req.Host)
+		}
 	}
 	if err != nil {
 		if isUnexpected(err) {

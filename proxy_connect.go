@@ -119,6 +119,7 @@ func (proxy *proxy) proceedWithConnect(ctx filters.Context, upstreamAddr string,
 
 	var rr io.Reader
 	if proxy.mitmIC != nil {
+		log.Debug("Trying to MITM")
 		// Try to MITM the connection
 		downstreamMITM, upstreamMITM, mitming, err := proxy.mitmIC.MITM(downstream, upstream)
 		if err != nil {
@@ -145,6 +146,8 @@ func (proxy *proxy) proceedWithConnect(ctx filters.Context, upstreamAddr string,
 				// Remove upstream info from context so that handle doesn't try to
 				// process this as a CONNECT
 				ctx = ctx.WithValue(ctxKeyUpstream, nil).WithValue(ctxKeyUpstreamAddr, nil)
+				// Add orig host to context for use by anyone who needs it
+				ctx = ctx.WithValue(ctxKeyOrigHost, upstreamAddr)
 				return proxy.handle(ctx, fullDownstream, downstream, upstream)
 			}
 
