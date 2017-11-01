@@ -38,14 +38,15 @@ type Proxy interface {
 // RequestAware is an interface for connections that are able to modify requests
 // before they're sent on the connection.
 type RequestAware interface {
-	// OnRequest allows this Conn to make modifications to the request as needed
+	// OnRequest allows this connection to make modifications to the request as
+	// needed
 	OnRequest(req *http.Request)
 }
 
 // ResponseAware is an interface for connections that are interested in knowing
 // about responses received on the connection.
 type ResponseAware interface {
-	// OnResponse allows this Conn to learn about responses
+	// OnResponse allows this connection to learn about responses
 	OnResponse(req *http.Request, resp *http.Response, err error)
 }
 
@@ -86,8 +87,10 @@ type proxy struct {
 	mitmIC *mitm.Interceptor
 }
 
-// New creates a new Proxy configured with the specified Opts.
-func New(opts *Opts) (Proxy, error) {
+// New creates a new Proxy configured with the specified Opts. If there's an
+// error initializing MITM, this returns an mitmErr, however the proxy is still
+// usable (it just won't MITM).
+func New(opts *Opts) (newProxy Proxy, mitmErr error) {
 	if opts.Dial == nil {
 		opts.Dial = func(ctx context.Context, isCONNECT bool, network, addr string) (conn net.Conn, err error) {
 			timeout := 30 * time.Second
@@ -102,7 +105,6 @@ func New(opts *Opts) (Proxy, error) {
 	opts.applyCONNECTDefaults()
 
 	p := &proxy{Opts: opts}
-	var mitmErr error
 	if opts.MITMOpts != nil {
 		p.mitmIC, mitmErr = mitm.Configure(opts.MITMOpts)
 		if mitmErr != nil {

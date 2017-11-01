@@ -274,9 +274,8 @@ func prepareRequest(req *http.Request) *http.Request {
 
 	// Request URL
 	req.URL = cloneURL(req.URL)
-	// We know that is going to be HTTP always because HTTPS isn't forwarded.
-	// We need to hardcode it here because req.URL.Scheme can be undefined, since
-	// client request don't need to use absolute URIs
+	// If req.URL.Scheme was blank, it's http. Otherwise, it's https and we leave
+	// it alone.
 	if req.URL.Scheme == "" {
 		req.URL.Scheme = "http"
 	}
