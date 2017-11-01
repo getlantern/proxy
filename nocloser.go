@@ -12,3 +12,7 @@ func (conn *noCloseConn) Close() error {
 	// don't close!
 	return nil
 }
+
+func (conn *noCloseConn) Wrapped() net.Conn {
+	return conn.Conn
+}

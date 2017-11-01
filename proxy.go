@@ -35,6 +35,20 @@ type Proxy interface {
 	Serve(l net.Listener) error
 }
 
+// RequestAware is an interface for connections that are able to modify requests
+// before they're sent on the connection.
+type RequestAware interface {
+	// OnRequest allows this Conn to make modifications to the request as needed
+	OnRequest(req *http.Request)
+}
+
+// ResponseAware is an interface for connections that are interested in knowing
+// about responses received on the connection.
+type ResponseAware interface {
+	// OnResponse allows this Conn to learn about responses
+	OnResponse(req *http.Request, resp *http.Response, err error)
+}
+
 // Opts defines options for configuring a Proxy
 type Opts struct {
 	// IdleTimeout, if specified, lets us know to include an appropriate

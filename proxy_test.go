@@ -28,7 +28,11 @@ import (
 )
 
 const (
-	okHeader = "X-Test-OK"
+	testReqHeader       = "X-Test-Req"
+	testReqAwareHeader  = "X-Test-Req-Aware"
+	testRespHeader      = "X-Test-Resp"
+	testRespAwareHeader = "X-Test-Resp-Aware"
+	testHeaderValue     = "true"
 )
 
 func init() {
@@ -340,20 +344,31 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 		mx.Lock()
 		seenAddresses[req.RemoteAddr] = true
 		mx.Unlock()
+		// Echo all testRespHeader headers
+		for key, value := range req.Header {
+			if strings.HasPrefix(key, "X-Test") {
+				w.Header()[key] = value
+			}
+		}
 		w.WriteHeader(http.StatusCreated)
 		w.Write([]byte(req.Host))
 	}))
 
 	requestNumber := 0
-	dial := func(ctx context.Context, isConnect bool, network, addr string) (net.Conn, error) {
-		requestNumber = ctx.(filters.Context).RequestNumber()
+	dial := func(ctx context.Context, isConnect bool, network, addr string) (conn net.Conn, err error) {
+		requestNumber = filters.AdaptContext(ctx).RequestNumber()
 		if requestMethod == http.MethodGet {
-			return tls.Dial("tcp", l.Addr().String(), &tls.Config{
+			conn, err = tls.Dial("tcp", l.Addr().String(), &tls.Config{
 				ServerName: "localhost",
 				RootCAs:    serverCert.PoolContainingCert(),
 			})
+		} else {
+			conn, err = net.Dial("tcp", l.Addr().String())
 		}
-		return net.Dial("tcp", l.Addr().String())
+		if err == nil {
+			conn = &testConn{conn}
+		}
+		return conn, err
 	}
 
 	first := true
@@ -365,12 +380,10 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 			first = false
 			return filters.Discard(ctx, req)
 		}
+		req.Header.Set(testReqHeader, testHeaderValue)
 		resp, nextCtx, nextErr := next(ctx, req)
 		if resp != nil {
-			resp.Header.Set("X-Test", "true")
-		}
-		if req.Method != http.MethodConnect {
-			assert.NotNil(t, ctx.UpstreamConn(), "Every non-CONNECT request should include the upstream conn")
+			resp.Header.Set(testRespHeader, testHeaderValue)
 		}
 		return resp, nextCtx, nextErr
 	})
@@ -445,10 +458,12 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 	}
 	if !isConnect && !discardFirstRequest {
 		assert.Equal(t, "subdomain.thehost:756", body, "Should have left port alone")
+		assert.Equal(t, testHeaderValue, resp.Header.Get(testReqAwareHeader))
+		assert.Equal(t, testHeaderValue, resp.Header.Get(testRespAwareHeader))
 	}
 	if !discardFirstRequest {
 		assert.Regexp(t, "timeout=\\d+", resp.Header.Get("Keep-Alive"), "All HTTP responses' headers should contain a Keep-Alive timeout")
-		assert.Equal(t, "true", resp.Header.Get("X-Test"))
+		assert.Equal(t, testHeaderValue, resp.Header.Get(testRespHeader))
 	}
 	assert.Equal(t, expectedRequestNumber, requestNumber)
 	if !includeFirst {
@@ -487,7 +502,9 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 	assert.Equal(t, "subdomain2.thehost", body, "Should have gotten right host")
 	if !isConnect {
 		assert.Contains(t, resp.Header.Get("Keep-Alive"), "timeout", "All HTTP responses' headers should contain a Keep-Alive timeout")
-		assert.Equal(t, "true", resp.Header.Get("X-Test"))
+		assert.Equal(t, testHeaderValue, resp.Header.Get(testRespHeader))
+		assert.Equal(t, testHeaderValue, resp.Header.Get(testReqAwareHeader))
+		assert.Equal(t, testHeaderValue, resp.Header.Get(testRespAwareHeader))
 		expectedRequestNumber++
 	}
 	assert.Equal(t, expectedRequestNumber, requestNumber)
@@ -502,7 +519,9 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 	assert.Equal(t, "subdomain3.thehost", body, "Should have gotten right host")
 	if !isConnect {
 		assert.Contains(t, resp.Header.Get("Keep-Alive"), "timeout", "All HTTP responses' headers should contain a Keep-Alive timeout")
-		assert.Equal(t, "true", resp.Header.Get("X-Test"))
+		assert.Equal(t, testHeaderValue, resp.Header.Get(testRespHeader))
+		assert.Equal(t, testHeaderValue, resp.Header.Get(testReqAwareHeader))
+		assert.Equal(t, testHeaderValue, resp.Header.Get(testRespAwareHeader))
 		expectedRequestNumber++
 	}
 	assert.Equal(t, expectedRequestNumber, requestNumber)
@@ -538,4 +557,20 @@ func roundTrip(p Proxy, req *http.Request) (resp *http.Response, roundTripErr er
 	handleErr = p.Handle(context.Background(), conn, conn)
 	resp, roundTripErr = http.ReadResponse(bufio.NewReader(bytes.NewReader(received.Bytes())), req)
 	return
+}
+
+type testConn struct {
+	net.Conn
+}
+
+func (conn *testConn) OnRequest(req *http.Request) {
+	req.Header.Set(testReqAwareHeader, testHeaderValue)
+}
+
+func (conn *testConn) OnResponse(req *http.Request, resp *http.Response, err error) {
+	resp.Header.Set(testRespAwareHeader, testHeaderValue)
+}
+
+func (conn *testConn) Wrapped() net.Conn {
+	return conn.Conn
 }

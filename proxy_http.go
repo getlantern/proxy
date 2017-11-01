@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/getlantern/errors"
+	"github.com/getlantern/netx"
 	"github.com/getlantern/preconn"
 	"github.com/getlantern/proxy/filters"
 )
@@ -44,7 +45,7 @@ func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstre
 	}()
 
 	downstreamBuffered := bufio.NewReader(downstreamIn)
-	fctx := filters.WrapContext(ctx, downstream)
+	fctx := filters.WrapContext(withAwareConn(ctx), downstream)
 
 	// Read initial request
 	req, err := http.ReadRequest(downstreamBuffered)
@@ -77,9 +78,9 @@ func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstre
 	} else {
 		var tr *http.Transport
 		if upstream != nil {
+			setUpstreamForAwareConn(fctx, upstream)
 			tr = &http.Transport{
 				DialContext: func(ctx context.Context, net, addr string) (net.Conn, error) {
-					filters.AdaptContext(ctx).SetUpstreamConn(upstream)
 					// always use the supplied upstream connection, but don't allow it to
 					// be closed by the transport
 					return &noCloseConn{upstream}, nil
@@ -93,7 +94,11 @@ func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstre
 			tr = &http.Transport{
 				DialContext: func(ctx context.Context, net, addr string) (net.Conn, error) {
 					conn, err := proxy.Dial(ctx, false, net, addr)
-					filters.AdaptContext(ctx).SetUpstreamConn(conn)
+					if err == nil {
+						// On first dialing conn, handle RequestAware
+						setUpstreamForAwareConn(ctx, conn)
+						handleRequestAware(ctx)
+					}
 					return conn, err
 				},
 				IdleConnTimeout: proxy.IdleTimeout,
@@ -105,7 +110,11 @@ func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstre
 
 		defer tr.CloseIdleConnections()
 		next = func(ctx filters.Context, modifiedReq *http.Request) (*http.Response, filters.Context, error) {
-			resp, err := tr.RoundTrip(prepareRequest(modifiedReq.WithContext(ctx)))
+			modifiedReq = modifiedReq.WithContext(ctx)
+			setRequestForAwareConn(ctx, modifiedReq)
+			handleRequestAware(ctx)
+			resp, err := tr.RoundTrip(prepareRequest(modifiedReq))
+			handleResponseAware(ctx, modifiedReq, resp, err)
 			return resp, ctx, err
 		}
 	}
@@ -187,6 +196,37 @@ func (proxy *proxy) processRequests(ctx filters.Context, remoteAddr string, req 
 		req.RemoteAddr = remoteAddr
 		req = req.WithContext(ctx)
 	}
+}
+
+func handleRequestAware(ctx context.Context) {
+	upstream := upstreamForAwareConn(ctx)
+	if upstream == nil {
+		return
+	}
+
+	netx.WalkWrapped(upstream, func(wrapped net.Conn) bool {
+		switch t := wrapped.(type) {
+		case RequestAware:
+			req := requestForAwareConn(ctx)
+			t.OnRequest(req)
+		}
+		return true
+	})
+}
+
+func handleResponseAware(ctx context.Context, req *http.Request, resp *http.Response, err error) {
+	upstream := upstreamForAwareConn(ctx)
+	if upstream == nil {
+		return
+	}
+
+	netx.WalkWrapped(upstream, func(wrapped net.Conn) bool {
+		switch t := wrapped.(type) {
+		case ResponseAware:
+			t.OnResponse(req, resp, err)
+		}
+		return true
+	})
 }
 
 func (proxy *proxy) writeResponse(downstream io.Writer, req *http.Request, resp *http.Response) error {

@@ -154,7 +154,6 @@ func (proxy *proxy) proceedWithConnect(ctx filters.Context, upstreamAddr string,
 		}
 	}
 
-	ctx.SetUpstreamConn(upstream)
 	// Prepare to pipe data between the client and the proxy.
 	bufOut := proxy.BufferSource.Get()
 	bufIn := proxy.BufferSource.Get()
