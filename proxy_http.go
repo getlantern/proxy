@@ -53,9 +53,11 @@ func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstre
 		if remoteAddr != nil {
 			req.RemoteAddr = downstream.RemoteAddr().String()
 		}
-		if OrigHost(ctx) == "" {
-			log.Debugf("Setting orig host to: %v", req.Host)
-			fctx = fctx.WithValue(ctxKeyOrigHost, req.Host)
+		if origURLScheme(ctx) == "" {
+			fctx = fctx.
+				WithValue(ctxKeyOrigURLScheme, req.URL.Scheme).
+				WithValue(ctxKeyOrigURLHost, req.URL.Host).
+				WithValue(ctxKeyOrigHost, req.Host)
 		}
 	}
 	if err != nil {
@@ -77,6 +79,7 @@ func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstre
 		if upstream != nil {
 			tr = &http.Transport{
 				DialContext: func(ctx context.Context, net, addr string) (net.Conn, error) {
+					filters.AdaptContext(ctx).SetUpstreamConn(upstream)
 					// always use the supplied upstream connection, but don't allow it to
 					// be closed by the transport
 					return &noCloseConn{upstream}, nil
@@ -89,7 +92,9 @@ func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstre
 		} else {
 			tr = &http.Transport{
 				DialContext: func(ctx context.Context, net, addr string) (net.Conn, error) {
-					return proxy.Dial(ctx, false, net, addr)
+					conn, err := proxy.Dial(ctx, false, net, addr)
+					filters.AdaptContext(ctx).SetUpstreamConn(conn)
+					return conn, err
 				},
 				IdleConnTimeout: proxy.IdleTimeout,
 				// since we have one transport per downstream connection, we don't need
@@ -114,6 +119,15 @@ func (proxy *proxy) processRequests(ctx filters.Context, remoteAddr string, req 
 	var err error
 
 	for {
+		if req.URL.Scheme == "" {
+			req.URL.Scheme = origURLScheme(ctx)
+		}
+		if req.URL.Host == "" {
+			req.URL.Host = origURLHost(ctx)
+		}
+		if req.Host == "" {
+			req.Host = origHost(ctx)
+		}
 		resp, ctx, err = proxy.Filter.Apply(ctx, req, next)
 		if err != nil && resp == nil {
 			resp = proxy.OnError(ctx, req, false, err)
@@ -223,7 +237,9 @@ func prepareRequest(req *http.Request) *http.Request {
 	// We know that is going to be HTTP always because HTTPS isn't forwarded.
 	// We need to hardcode it here because req.URL.Scheme can be undefined, since
 	// client request don't need to use absolute URIs
-	req.URL.Scheme = "http"
+	if req.URL.Scheme == "" {
+		req.URL.Scheme = "http"
+	}
 	// We need to make sure the host is defined in the URL (not the actual URI)
 	req.URL.Host = req.Host
 

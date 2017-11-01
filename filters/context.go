@@ -9,8 +9,10 @@ import (
 type contextKey string
 
 const (
-	ctxKeyDownstream    = contextKey("downstream")
+	ctxKeyConns         = contextKey("conns")
 	ctxKeyRequestNumber = contextKey("requestNumber")
+	down                = "down"
+	up                  = "up"
 )
 
 // Context is a wrapper for Context that exposes some additional
@@ -20,6 +22,12 @@ type Context interface {
 
 	// DownstreamConn retrieves the downstream connection from the given Context.
 	DownstreamConn() net.Conn
+
+	// SetUpstreamConn sets the upstream connection in the existing Context.
+	SetUpstreamConn(upstream net.Conn)
+
+	// UpstreamConn retrieves the upstream connection from the given Context.
+	UpstreamConn() net.Conn
 
 	// RequestNumber indicates how many requests have been received on the current
 	// connection. The RequestNumber for the first request is 1, for the second is 2
@@ -48,7 +56,12 @@ type Context interface {
 func WrapContext(ctx context.Context, downstream net.Conn) Context {
 	return (&ctext{ctx}).
 		WithValue(ctxKeyRequestNumber, 1).
-		WithValue(ctxKeyDownstream, downstream)
+		WithValue(ctxKeyConns, map[string]net.Conn{down: downstream})
+}
+
+// AdaptContext adapts a plain context.Context to the Context interface.
+func AdaptContext(ctx context.Context) Context {
+	return &ctext{ctx}
 }
 
 // BackgroundContext creates a background Context without an associated
@@ -63,7 +76,15 @@ type ctext struct {
 }
 
 func (ctx *ctext) DownstreamConn() net.Conn {
-	return ctx.Value(ctxKeyDownstream).(net.Conn)
+	return ctx.Value(ctxKeyConns).(map[string]net.Conn)[down]
+}
+
+func (ctx *ctext) SetUpstreamConn(upstream net.Conn) {
+	ctx.Value(ctxKeyConns).(map[string]net.Conn)[up] = upstream
+}
+
+func (ctx *ctext) UpstreamConn() net.Conn {
+	return ctx.Value(ctxKeyConns).(map[string]net.Conn)[up]
 }
 
 func (ctx *ctext) RequestNumber() int {

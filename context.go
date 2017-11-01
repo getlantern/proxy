@@ -12,6 +12,8 @@ const (
 	ctxKeyUpstreamAddr  = contextKey("upstreamAddr")
 	ctxKeyMITMTLSConfig = contextKey("mitmTLSConfig")
 	ctxKeyNoRespondOkay = contextKey("noRespondOK")
+	ctxKeyOrigURLScheme = contextKey("origURLScheme")
+	ctxKeyOrigURLHost   = contextKey("origURLHost")
 	ctxKeyOrigHost      = contextKey("origHost")
 )
 
@@ -31,8 +33,23 @@ func upstreamAddr(ctx context.Context) string {
 	return upstreamAddr.(string)
 }
 
-// OrigHost exposes the original Host for HTTP/1.1 requests
-func OrigHost(ctx context.Context) string {
+func origURLScheme(ctx context.Context) string {
+	origHost := ctx.Value(ctxKeyOrigURLScheme)
+	if origHost == nil {
+		return ""
+	}
+	return origHost.(string)
+}
+
+func origURLHost(ctx context.Context) string {
+	origHost := ctx.Value(ctxKeyOrigURLHost)
+	if origHost == nil {
+		return ""
+	}
+	return origHost.(string)
+}
+
+func origHost(ctx context.Context) string {
 	origHost := ctx.Value(ctxKeyOrigHost)
 	if origHost == nil {
 		return ""

@@ -369,6 +369,9 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 		if resp != nil {
 			resp.Header.Set("X-Test", "true")
 		}
+		if req.Method != http.MethodConnect {
+			assert.NotNil(t, ctx.UpstreamConn(), "Every non-CONNECT request should include the upstream conn")
+		}
 		return resp, nextCtx, nextErr
 	})
 

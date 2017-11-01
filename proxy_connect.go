@@ -47,7 +47,8 @@ type connectInterceptor struct {
 func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 	return func(ctx filters.Context, modifiedReq *http.Request) (*http.Response, filters.Context, error) {
 		var resp *http.Response
-		nextCtx := ctx.WithValue(ctxKeyUpstreamAddr, modifiedReq.URL.Host)
+		upstreamAddr := modifiedReq.URL.Host
+		nextCtx := ctx.WithValue(ctxKeyUpstreamAddr, upstreamAddr)
 
 		if !proxy.OKWaitsForUpstream {
 			// We preemptively respond with an OK on the client. Some user agents like
@@ -67,7 +68,7 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 		// Note - for CONNECT requests, we use the Host from the request URL, not the
 		// Host header. See discussion here:
 		// https://ask.wireshark.org/questions/22988/http-host-header-with-and-without-port-number
-		upstream, err := proxy.Dial(ctx, true, "tcp", modifiedReq.URL.Host)
+		upstream, err := proxy.Dial(ctx, true, "tcp", upstreamAddr)
 		if err != nil {
 			if proxy.OKWaitsForUpstream {
 				return badGateway(ctx, modifiedReq, err)
@@ -146,8 +147,6 @@ func (proxy *proxy) proceedWithConnect(ctx filters.Context, upstreamAddr string,
 				// Remove upstream info from context so that handle doesn't try to
 				// process this as a CONNECT
 				ctx = ctx.WithValue(ctxKeyUpstream, nil).WithValue(ctxKeyUpstreamAddr, nil)
-				// Add orig host to context for use by anyone who needs it
-				ctx = ctx.WithValue(ctxKeyOrigHost, upstreamAddr)
 				return proxy.handle(ctx, fullDownstream, downstream, upstream)
 			}
 
@@ -155,6 +154,7 @@ func (proxy *proxy) proceedWithConnect(ctx filters.Context, upstreamAddr string,
 		}
 	}
 
+	ctx.SetUpstreamConn(upstream)
 	// Prepare to pipe data between the client and the proxy.
 	bufOut := proxy.BufferSource.Get()
 	bufIn := proxy.BufferSource.Get()
