@@ -11,7 +11,6 @@ type contextKey string
 const (
 	ctxKeyUpstream      = contextKey("upstream")
 	ctxKeyUpstreamAddr  = contextKey("upstreamAddr")
-	ctxKeyMITMTLSConfig = contextKey("mitmTLSConfig")
 	ctxKeyNoRespondOkay = contextKey("noRespondOK")
 	ctxKeyOrigURLScheme = contextKey("origURLScheme")
 	ctxKeyOrigURLHost   = contextKey("origURLHost")
