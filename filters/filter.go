@@ -38,13 +38,16 @@ func ShortCircuit(ctx Context, req *http.Request, resp *http.Response) (*http.Re
 // Fail fails processing, returning a response with the given status code and
 // description populated from error.
 func Fail(ctx Context, req *http.Request, statusCode int, err error) (*http.Response, Context, error) {
+	errString := err.Error()
 	resp := &http.Response{
-		Proto:      req.Proto,
-		ProtoMajor: req.ProtoMajor,
-		ProtoMinor: req.ProtoMinor,
-		StatusCode: statusCode,
-		Header:     make(http.Header),
-		Body:       ioutil.NopCloser(strings.NewReader(err.Error())),
+		Proto:         req.Proto,
+		ProtoMajor:    req.ProtoMajor,
+		ProtoMinor:    req.ProtoMinor,
+		StatusCode:    statusCode,
+		Header:        make(http.Header),
+		Body:          ioutil.NopCloser(strings.NewReader(errString)),
+		ContentLength: int64(len(errString)),
+		Close:         true,
 	}
 	return resp, ctx, err
 }
