@@ -32,6 +32,10 @@ func ShortCircuit(ctx Context, req *http.Request, resp *http.Response) (*http.Re
 	resp.Proto = req.Proto
 	resp.ProtoMajor = req.ProtoMajor
 	resp.ProtoMinor = req.ProtoMinor
+	if resp.Body != nil && resp.ContentLength <= 0 && len(resp.TransferEncoding) == 0 {
+		resp.ContentLength = -1
+		resp.TransferEncoding = []string{"chunked"}
+	}
 	return resp, ctx, nil
 }
 

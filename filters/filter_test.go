@@ -2,7 +2,9 @@ package filters
 
 import (
 	"errors"
+	"io/ioutil"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -52,7 +54,11 @@ func doTestFilterChain(t *testing.T, shortCircuit bool) {
 		expectedErr = nil
 	}
 	assert.Equal(t, expectedErr, err)
-	if !shortCircuit {
+	if shortCircuit {
+		t.Log(resp)
+		assert.EqualValues(t, -1, resp.ContentLength)
+		assert.Equal(t, []string{"chunked"}, resp.TransferEncoding)
+	} else {
 		assert.True(t, calledFinalNext)
 	}
 	assert.Equal(t, "1", req.Header.Get("a"))
@@ -78,6 +84,7 @@ func (f *testFilter) Apply(ctx Context, req *http.Request, next Next) (*http.Res
 		return ShortCircuit(ctx, req, &http.Response{
 			Request:    req,
 			StatusCode: http.StatusMovedPermanently,
+			Body:       ioutil.NopCloser(strings.NewReader("shortcircuited")),
 		})
 	}
 	req.Header.Add("In-Order", f.key)
