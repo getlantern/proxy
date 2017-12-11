@@ -32,19 +32,26 @@ func ShortCircuit(ctx Context, req *http.Request, resp *http.Response) (*http.Re
 	resp.Proto = req.Proto
 	resp.ProtoMajor = req.ProtoMajor
 	resp.ProtoMinor = req.ProtoMinor
+	if resp.Body != nil && resp.ContentLength <= 0 && len(resp.TransferEncoding) == 0 {
+		resp.ContentLength = -1
+		resp.TransferEncoding = []string{"chunked"}
+	}
 	return resp, ctx, nil
 }
 
 // Fail fails processing, returning a response with the given status code and
 // description populated from error.
 func Fail(ctx Context, req *http.Request, statusCode int, err error) (*http.Response, Context, error) {
+	errString := err.Error()
 	resp := &http.Response{
-		Proto:      req.Proto,
-		ProtoMajor: req.ProtoMajor,
-		ProtoMinor: req.ProtoMinor,
-		StatusCode: statusCode,
-		Header:     make(http.Header),
-		Body:       ioutil.NopCloser(strings.NewReader(err.Error())),
+		Proto:         req.Proto,
+		ProtoMajor:    req.ProtoMajor,
+		ProtoMinor:    req.ProtoMinor,
+		StatusCode:    statusCode,
+		Header:        make(http.Header),
+		Body:          ioutil.NopCloser(strings.NewReader(errString)),
+		ContentLength: int64(len(errString)),
+		Close:         true,
 	}
 	return resp, ctx, err
 }
