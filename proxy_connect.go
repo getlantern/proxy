@@ -147,6 +147,7 @@ func (proxy *proxy) proceedWithConnect(ctx filters.Context, upstreamAddr string,
 				// Remove upstream info from context so that handle doesn't try to
 				// process this as a CONNECT
 				ctx = ctx.WithValue(ctxKeyUpstream, nil).WithValue(ctxKeyUpstreamAddr, nil)
+				ctx = ctx.WithMITMing()
 				return proxy.handle(ctx, fullDownstream, downstream, upstream)
 			}
 

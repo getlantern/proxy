@@ -11,6 +11,7 @@ type contextKey string
 const (
 	ctxKeyDownstream    = contextKey("downstream")
 	ctxKeyRequestNumber = contextKey("requestNumber")
+	ctxKeyMITMing       = contextKey("mitming")
 )
 
 // Context is a wrapper for Context that exposes some additional
@@ -38,6 +39,12 @@ type Context interface {
 
 	// WithTimeout mimics the method on context.Context
 	WithTimeout(timeout time.Duration) (Context, context.CancelFunc)
+
+	// WithMITMing marks this context as being part of an MITM'ed connection.
+	WithMITMing() Context
+
+	// IsMITMing indicates whether or the proxy is MITMing the current connection.
+	IsMITMing() bool
 
 	// WithValue mimics the method on context.Context
 	WithValue(key, val interface{}) Context
@@ -92,6 +99,15 @@ func (ctx *ctext) WithDeadline(deadline time.Time) (Context, context.CancelFunc)
 func (ctx *ctext) WithTimeout(timeout time.Duration) (Context, context.CancelFunc) {
 	result, cancel := context.WithTimeout(ctx, timeout)
 	return &ctext{result}, cancel
+}
+
+func (ctx *ctext) WithMITMing() Context {
+	return ctx.WithValue(ctxKeyMITMing, true)
+}
+
+func (ctx *ctext) IsMITMing() bool {
+	mitming := ctx.Value(ctxKeyMITMing)
+	return mitming != nil && mitming.(bool)
 }
 
 func (ctx *ctext) WithValue(key, val interface{}) Context {

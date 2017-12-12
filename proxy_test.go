@@ -385,6 +385,14 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 		if resp != nil {
 			resp.Header.Set(testRespHeader, testHeaderValue)
 		}
+
+		isConnect := req.Method == http.MethodConnect
+		if !isConnect && shouldMITM {
+			assert.True(t, ctx.IsMITMing())
+		} else {
+			assert.False(t, ctx.IsMITMing())
+		}
+
 		return resp, nextCtx, nextErr
 	})
 
