@@ -84,7 +84,8 @@ type Opts struct {
 
 type proxy struct {
 	*Opts
-	mitmIC *mitm.Interceptor
+	mitmIC      *mitm.Interceptor
+	mitmDomains map[string]bool
 }
 
 // New creates a new Proxy configured with the specified Opts. If there's an
@@ -104,11 +105,18 @@ func New(opts *Opts) (newProxy Proxy, mitmErr error) {
 	opts.applyHTTPDefaults()
 	opts.applyCONNECTDefaults()
 
-	p := &proxy{Opts: opts}
+	p := &proxy{
+		Opts:        opts,
+		mitmDomains: make(map[string]bool),
+	}
 	if opts.MITMOpts != nil {
 		p.mitmIC, mitmErr = mitm.Configure(opts.MITMOpts)
 		if mitmErr != nil {
 			mitmErr = errors.New("Unable to configure MITM: %v", mitmErr)
+		} else {
+			for _, domain := range opts.MITMOpts.Domains {
+				p.mitmDomains[domain] = true
+			}
 		}
 	}
 
