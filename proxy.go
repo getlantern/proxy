@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"regexp"
 	"time"
 
 	"github.com/getlantern/errors"
@@ -85,7 +86,7 @@ type Opts struct {
 type proxy struct {
 	*Opts
 	mitmIC      *mitm.Interceptor
-	mitmDomains map[string]bool
+	mitmDomains []*regexp.Regexp
 }
 
 // New creates a new Proxy configured with the specified Opts. If there's an
@@ -107,7 +108,7 @@ func New(opts *Opts) (newProxy Proxy, mitmErr error) {
 
 	p := &proxy{
 		Opts:        opts,
-		mitmDomains: make(map[string]bool),
+		mitmDomains: make([]*regexp.Regexp, 0),
 	}
 	if opts.MITMOpts != nil {
 		p.mitmIC, mitmErr = mitm.Configure(opts.MITMOpts)
@@ -115,7 +116,12 @@ func New(opts *Opts) (newProxy Proxy, mitmErr error) {
 			mitmErr = errors.New("Unable to configure MITM: %v", mitmErr)
 		} else {
 			for _, domain := range opts.MITMOpts.Domains {
-				p.mitmDomains[domain] = true
+				re, err := domainToRegex(domain)
+				if err != nil {
+					log.Errorf("Unable to convert domain %v to regex: %v", domain, err)
+				} else {
+					p.mitmDomains = append(p.mitmDomains, re)
+				}
 			}
 		}
 	}

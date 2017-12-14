@@ -119,42 +119,38 @@ func (proxy *proxy) proceedWithConnect(ctx filters.Context, upstreamAddr string,
 	}()
 
 	var rr io.Reader
-	if proxy.mitmIC != nil {
-		host, _, err := net.SplitHostPort(upstreamAddr)
-		if err == nil && proxy.mitmDomains[host] {
-			log.Debug("Trying to MITM")
-			// Try to MITM the connection
-			downstreamMITM, upstreamMITM, mitming, err := proxy.mitmIC.MITM(downstream, upstream)
-			if err != nil {
-				log.Errorf("Unable to MITM %v: %v", upstreamAddr, err)
-				return errors.New("Unable to MITM connection: %v", err)
+	if proxy.shouldMITM(upstreamAddr) {
+		// Try to MITM the connection
+		downstreamMITM, upstreamMITM, mitming, err := proxy.mitmIC.MITM(downstream, upstream)
+		if err != nil {
+			log.Errorf("Unable to MITM %v: %v", upstreamAddr, err)
+			return errors.New("Unable to MITM connection: %v", err)
+		}
+		downstream = downstreamMITM
+		upstream = upstreamMITM
+		if mitming {
+			// Try to read HTTP request and process as HTTP assuming that requests
+			// (not including body) are always smaller than 65K. If this assumption is
+			// violated, we won't be able to process the data on this connection.
+			downstreamRR := reconn.Wrap(downstream, maxHTTPSize)
+			_, peekReqErr := http.ReadRequest(bufio.NewReader(downstreamRR))
+			var rrErr error
+			rr, rrErr = downstreamRR.Rereader()
+			if rrErr != nil {
+				// Reading request overflowed, abort
+				return errors.New("Unable to re-read data: %v", rrErr)
 			}
-			downstream = downstreamMITM
-			upstream = upstreamMITM
-			if mitming {
-				// Try to read HTTP request and process as HTTP assuming that requests
-				// (not including body) are always smaller than 65K. If this assumption is
-				// violated, we won't be able to process the data on this connection.
-				downstreamRR := reconn.Wrap(downstream, maxHTTPSize)
-				_, peekReqErr := http.ReadRequest(bufio.NewReader(downstreamRR))
-				var rrErr error
-				rr, rrErr = downstreamRR.Rereader()
-				if rrErr != nil {
-					// Reading request overflowed, abort
-					return errors.New("Unable to re-read data: %v", rrErr)
-				}
-				if peekReqErr == nil {
-					// Handle as HTTP, prepend already read HTTP request
-					fullDownstream := io.MultiReader(rr, downstream)
-					// Remove upstream info from context so that handle doesn't try to
-					// process this as a CONNECT
-					ctx = ctx.WithValue(ctxKeyUpstream, nil).WithValue(ctxKeyUpstreamAddr, nil)
-					ctx = ctx.WithMITMing()
-					return proxy.handle(ctx, fullDownstream, downstream, upstream)
-				}
+			if peekReqErr == nil {
+				// Handle as HTTP, prepend already read HTTP request
+				fullDownstream := io.MultiReader(rr, downstream)
+				// Remove upstream info from context so that handle doesn't try to
+				// process this as a CONNECT
+				ctx = ctx.WithValue(ctxKeyUpstream, nil).WithValue(ctxKeyUpstreamAddr, nil)
+				ctx = ctx.WithMITMing()
+				return proxy.handle(ctx, fullDownstream, downstream, upstream)
+			}
 
-				// We couldn't read the first HTTP Request, fall back to piping data
-			}
+			// We couldn't read the first HTTP Request, fall back to piping data
 		}
 	}
 
@@ -197,4 +193,20 @@ func (dbs *defaultBufferSource) Get() []byte {
 
 func (dbs *defaultBufferSource) Put(buf []byte) {
 	// do nothing
+}
+
+func (proxy *proxy) shouldMITM(upstreamAddr string) bool {
+	if proxy.mitmIC == nil {
+		return false
+	}
+	host, _, err := net.SplitHostPort(upstreamAddr)
+	if err != nil {
+		return false
+	}
+	for _, mitmDomain := range proxy.mitmDomains {
+		if mitmDomain.MatchString(host) {
+			return true
+		}
+	}
+	return false
 }
