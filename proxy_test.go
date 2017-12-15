@@ -37,10 +37,16 @@ const (
 
 func init() {
 	// Clean up certs
-	os.Remove("serverpk.pem")
-	os.Remove("servercert.pem")
-	os.Remove("proxypk.pem")
-	os.Remove("proxycert.pem")
+	files, _ := ioutil.ReadDir(".")
+	for _, file := range files {
+		filename := file.Name()
+		if strings.Contains(filename, "serverpk.pem") ||
+			strings.Contains(filename, "servercert.pem") ||
+			strings.Contains(filename, "proxypk.pem") ||
+			strings.Contains(filename, "proxycert.pem") {
+			os.Remove(file.Name())
+		}
+	}
 }
 
 func TestDialFailureHTTP(t *testing.T) {
@@ -405,6 +411,7 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 			ClientTLSConfig: &tls.Config{
 				RootCAs: serverCert.PoolContainingCert(),
 			},
+			Domains: []string{"localhost"},
 		}
 	}
 
@@ -482,13 +489,9 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 		// Upgrade to TLS
 		var tlsConfig *tls.Config
 		if shouldMITM {
-			proxyCert, err := keyman.LoadCertificateFromFile("proxycert.pem")
-			if !assert.NoError(t, err) {
-				return
-			}
 			tlsConfig = &tls.Config{
-				ServerName: "localhost",
-				RootCAs:    proxyCert.PoolContainingCert(),
+				ServerName:         "localhost",
+				InsecureSkipVerify: true,
 			}
 		} else {
 			tlsConfig = &tls.Config{

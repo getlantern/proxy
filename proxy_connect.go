@@ -29,10 +29,21 @@ type BufferSource interface {
 	Put(buf []byte)
 }
 
-func (opts *Opts) applyCONNECTDefaults() {
+func (proxy *proxy) applyCONNECTDefaults() {
 	// Apply defaults
-	if opts.BufferSource == nil {
-		opts.BufferSource = &defaultBufferSource{}
+	if proxy.BufferSource == nil {
+		proxy.BufferSource = &defaultBufferSource{}
+	}
+	if proxy.ShouldMITM == nil {
+		proxy.ShouldMITM = proxy.defaultShouldMITM
+	} else {
+		orig := proxy.ShouldMITM
+		proxy.ShouldMITM = func(req *http.Request, upstreamAddr string) bool {
+			if !orig(req, upstreamAddr) {
+				return false
+			}
+			return proxy.defaultShouldMITM(req, upstreamAddr)
+		}
 	}
 }
 
@@ -104,7 +115,7 @@ func (proxy *proxy) Connect(ctx context.Context, in io.Reader, conn net.Conn, or
 	return proxy.Handle(context.WithValue(ctx, ctxKeyNoRespondOkay, "true"), pin, conn)
 }
 
-func (proxy *proxy) proceedWithConnect(ctx filters.Context, upstreamAddr string, upstream net.Conn, downstream net.Conn) error {
+func (proxy *proxy) proceedWithConnect(ctx filters.Context, req *http.Request, upstreamAddr string, upstream net.Conn, downstream net.Conn) error {
 	if upstream == nil {
 		var dialErr error
 		upstream, dialErr = proxy.Dial(ctx, true, "tcp", upstreamAddr)
@@ -119,7 +130,7 @@ func (proxy *proxy) proceedWithConnect(ctx filters.Context, upstreamAddr string,
 	}()
 
 	var rr io.Reader
-	if proxy.shouldMITM(upstreamAddr) {
+	if proxy.ShouldMITM(req, upstreamAddr) {
 		// Try to MITM the connection
 		downstreamMITM, upstreamMITM, mitming, err := proxy.mitmIC.MITM(downstream, upstream)
 		if err != nil {
@@ -195,7 +206,7 @@ func (dbs *defaultBufferSource) Put(buf []byte) {
 	// do nothing
 }
 
-func (proxy *proxy) shouldMITM(upstreamAddr string) bool {
+func (proxy *proxy) defaultShouldMITM(req *http.Request, upstreamAddr string) bool {
 	if proxy.mitmIC == nil {
 		return false
 	}

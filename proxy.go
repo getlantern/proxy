@@ -76,6 +76,10 @@ type Opts struct {
 	// Dial is the function that's used to dial upstream.
 	Dial DialFunc
 
+	// ShouldMITM is an optional function for determining whether or not the given
+	// HTTP CONNECT request to the given upstreamAddr is eligible for being MITM'ed.
+	ShouldMITM func(req *http.Request, upstreamAddr string) bool
+
 	// MITMOpts, if specified, instructs proxy to attempt to man-in-the-middle
 	// connections and handle them as an HTTP proxy. If the connection cannot be
 	// mitm'ed (e.g. Client Hello doesn't include an SNI header) or if the
@@ -103,13 +107,13 @@ func New(opts *Opts) (newProxy Proxy, mitmErr error) {
 			return net.DialTimeout(network, addr, timeout)
 		}
 	}
-	opts.applyHTTPDefaults()
-	opts.applyCONNECTDefaults()
-
 	p := &proxy{
 		Opts:        opts,
 		mitmDomains: make([]*regexp.Regexp, 0),
 	}
+	p.applyHTTPDefaults()
+	p.applyCONNECTDefaults()
+
 	if opts.MITMOpts != nil {
 		p.mitmIC, mitmErr = mitm.Configure(opts.MITMOpts)
 		if mitmErr != nil {

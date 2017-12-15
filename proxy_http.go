@@ -164,7 +164,7 @@ func (proxy *proxy) processRequests(ctx filters.Context, remoteAddr string, req 
 		}
 
 		if isConnect {
-			return proxy.proceedWithConnect(ctx, upstreamAddr, upstream, downstream)
+			return proxy.proceedWithConnect(ctx, req, upstreamAddr, upstream, downstream)
 		}
 
 		if req.Close {
