@@ -7,8 +7,10 @@ import (
 
 func domainToRegex(domain string) (*regexp.Regexp, error) {
 	parts := strings.Split(domain, ".")
-	if parts[0] == "*" {
-		parts[0] = `(.+)`
+	for i, part := range parts {
+		if part == "*" {
+			parts[i] = `[^.]+`
+		}
 	}
-	return regexp.Compile(strings.Join(parts, "."))
+	return regexp.Compile("^" + strings.Join(parts, "\\."))
 }
