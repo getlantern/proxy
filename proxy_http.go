@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"net"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"strings"
 	"time"
@@ -50,6 +51,14 @@ func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstre
 	// Read initial request
 	req, err := http.ReadRequest(downstreamBuffered)
 	if req != nil {
+		// see what request looks like
+		dump, dumpErr := httputil.DumpRequest(req, true)
+		if dumpErr != nil {
+			log.Error(dumpErr)
+		} else {
+			log.Debugf("New request: %s", string(dump))
+		}
+
 		remoteAddr := downstream.RemoteAddr()
 		if remoteAddr != nil {
 			req.RemoteAddr = downstream.RemoteAddr().String()
