@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httputil"
 	"strings"
 	"time"
 
@@ -140,18 +141,27 @@ func (proxy *proxy) proceedWithConnect(ctx filters.Context, req *http.Request, u
 		downstream = downstreamMITM
 		upstream = upstreamMITM
 		if mitming {
+			log.Debugf("Mitming.. addr is %s", upstreamAddr)
 			// Try to read HTTP request and process as HTTP assuming that requests
 			// (not including body) are always smaller than 65K. If this assumption is
 			// violated, we won't be able to process the data on this connection.
 			downstreamRR := reconn.Wrap(downstream, maxHTTPSize)
-			_, peekReqErr := http.ReadRequest(bufio.NewReader(downstreamRR))
+			rdr := bufio.NewReader(downstreamRR)
+			req, peekReqErr := http.ReadRequest(rdr)
 			var rrErr error
 			rr, rrErr = downstreamRR.Rereader()
 			if rrErr != nil {
 				// Reading request overflowed, abort
+				log.Error(rrErr)
 				return errors.New("Unable to re-read data: %v", rrErr)
 			}
 			if peekReqErr == nil {
+				// see what request looks like
+				dump, err := httputil.DumpRequest(req, true)
+				if err != nil {
+					log.Errro(err)
+				}
+				log.Debugf("New request: %s", string(dump))
 				// Handle as HTTP, prepend already read HTTP request
 				fullDownstream := io.MultiReader(rr, downstream)
 				// Remove upstream info from context so that handle doesn't try to
@@ -160,7 +170,6 @@ func (proxy *proxy) proceedWithConnect(ctx filters.Context, req *http.Request, u
 				ctx = ctx.WithMITMing()
 				return proxy.handle(ctx, fullDownstream, downstream, upstream)
 			}
-
 			// We couldn't read the first HTTP Request, fall back to piping data
 		}
 	}
