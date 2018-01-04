@@ -186,6 +186,7 @@ func (proxy *proxy) proceedWithConnect(ctx filters.Context, req *http.Request, u
 		// before we start piping as usual
 		_, copyErr := io.CopyBuffer(upstream, rr, bufOut)
 		if copyErr != nil {
+			log.Error(copyErr)
 			return errors.New("Error copying initial data to upstream: %v", copyErr)
 		}
 	}
