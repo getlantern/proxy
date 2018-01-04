@@ -148,6 +148,9 @@ func (proxy *proxy) proceedWithConnect(ctx filters.Context, req *http.Request, u
 			downstreamRR := reconn.Wrap(downstream, maxHTTPSize)
 			rdr := bufio.NewReader(downstreamRR)
 			req, peekReqErr := http.ReadRequest(rdr)
+			if peekReqErr != nil {
+				log.Error(peekReqErr)
+			}
 			var rrErr error
 			rr, rrErr = downstreamRR.Rereader()
 			if rrErr != nil {
@@ -182,6 +185,7 @@ func (proxy *proxy) proceedWithConnect(ctx filters.Context, req *http.Request, u
 	defer proxy.BufferSource.Put(bufIn)
 
 	if rr != nil {
+		log.Debugf("Failed to MITM; copying already read data upstream")
 		// We tried and failed to MITM. First copy already read data to upstream
 		// before we start piping as usual
 		_, copyErr := io.CopyBuffer(upstream, rr, bufOut)
