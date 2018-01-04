@@ -159,9 +159,10 @@ func (proxy *proxy) proceedWithConnect(ctx filters.Context, req *http.Request, u
 				// see what request looks like
 				dump, err := httputil.DumpRequest(req, true)
 				if err != nil {
-					log.Errro(err)
+					log.Error(err)
+				} else {
+					log.Debugf("New request: %s", string(dump))
 				}
-				log.Debugf("New request: %s", string(dump))
 				// Handle as HTTP, prepend already read HTTP request
 				fullDownstream := io.MultiReader(rr, downstream)
 				// Remove upstream info from context so that handle doesn't try to
