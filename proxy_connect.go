@@ -58,6 +58,12 @@ type connectInterceptor struct {
 
 func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 	return func(ctx filters.Context, modifiedReq *http.Request) (*http.Response, filters.Context, error) {
+		dump, dumpErr := httputil.DumpRequest(req, true)
+		if dumpErr != nil {
+			log.Error(dumpErr)
+		} else {
+			log.Debugf("New request: %s", string(dump))
+		}
 		var resp *http.Response
 		upstreamAddr := modifiedReq.URL.Host
 		nextCtx := ctx.WithValue(ctxKeyUpstreamAddr, upstreamAddr)
