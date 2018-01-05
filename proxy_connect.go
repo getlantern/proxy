@@ -58,7 +58,7 @@ type connectInterceptor struct {
 
 func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 	return func(ctx filters.Context, modifiedReq *http.Request) (*http.Response, filters.Context, error) {
-		dump, dumpErr := httputil.DumpRequest(req, true)
+		dump, dumpErr := httputil.DumpRequest(modifiedReq, true)
 		if dumpErr != nil {
 			log.Error(dumpErr)
 		} else {
