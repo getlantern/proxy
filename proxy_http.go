@@ -83,6 +83,7 @@ func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstre
 
 	var next filters.Next
 	if req.Method == http.MethodConnect {
+		log.Debugf("it's a CONNECT request")
 		next = proxy.nextCONNECT(downstream)
 	} else {
 		var tr *http.Transport
@@ -102,6 +103,7 @@ func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstre
 		} else {
 			tr = &http.Transport{
 				DialContext: func(ctx context.Context, net, addr string) (net.Conn, error) {
+					log.Debugf("Dialing %s", addr)
 					conn, err := proxy.Dial(ctx, false, net, addr)
 					if err == nil {
 						// On first dialing conn, handle RequestAware
@@ -173,6 +175,7 @@ func (proxy *proxy) processRequests(ctx filters.Context, remoteAddr string, req 
 		}
 
 		if isConnect {
+			log.Debugf("Proceeding with CONNECT request")
 			return proxy.proceedWithConnect(ctx, req, upstreamAddr, upstream, downstream)
 		}
 
@@ -198,6 +201,13 @@ func (proxy *proxy) processRequests(ctx filters.Context, remoteAddr string, req 
 				return errors.New("Unable to read next request from downstream: %v", readErr)
 			}
 			return err
+		} else {
+			dump, dumpErr := httputil.DumpRequest(req, true)
+			if dumpErr != nil {
+				log.Error(dumpErr)
+			} else {
+				log.Debugf("Next request: %s", string(dump))
+			}
 		}
 
 		// Preserve remote address from original request
