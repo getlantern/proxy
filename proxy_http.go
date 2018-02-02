@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/getlantern/errors"
-	"github.com/getlantern/idletiming"
+	"github.com/getlantern/netx"
 	"github.com/getlantern/preconn"
 	"github.com/getlantern/proxy/filters"
 )
@@ -34,20 +34,18 @@ func (opts *Opts) applyHTTPDefaults() {
 
 // Handle implements the interface Proxy
 func (proxy *proxy) Handle(ctx context.Context, downstreamIn io.Reader, downstream net.Conn) error {
+	return proxy.handle(ctx, downstreamIn, downstream, nil)
+}
+
+func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstream net.Conn, upstream net.Conn) error {
 	defer func() {
 		if closeErr := downstream.Close(); closeErr != nil {
 			log.Tracef("Error closing downstream connection: %s", closeErr)
 		}
 	}()
 
-	var downstreamBuffered *bufio.Reader
-	switch r := downstreamIn.(type) {
-	case *bufio.Reader:
-		downstreamBuffered = r
-	default:
-		downstreamBuffered = bufio.NewReader(r)
-	}
-	fctx := filters.WrapContext(ctx, downstream)
+	downstreamBuffered := bufio.NewReader(downstreamIn)
+	fctx := filters.WrapContext(withAwareConn(ctx), downstream)
 
 	// Read initial request
 	req, err := http.ReadRequest(downstreamBuffered)
@@ -55,6 +53,12 @@ func (proxy *proxy) Handle(ctx context.Context, downstreamIn io.Reader, downstre
 		remoteAddr := downstream.RemoteAddr()
 		if remoteAddr != nil {
 			req.RemoteAddr = downstream.RemoteAddr().String()
+		}
+		if origURLScheme(ctx) == "" {
+			fctx = fctx.
+				WithValue(ctxKeyOrigURLScheme, req.URL.Scheme).
+				WithValue(ctxKeyOrigURLHost, req.URL.Host).
+				WithValue(ctxKeyOrigHost, req.Host)
 		}
 	}
 	if err != nil {
@@ -72,19 +76,45 @@ func (proxy *proxy) Handle(ctx context.Context, downstreamIn io.Reader, downstre
 	if req.Method == http.MethodConnect {
 		next = proxy.nextCONNECT(downstream)
 	} else {
-		tr := &http.Transport{
-			DialContext: func(ctx context.Context, net, addr string) (net.Conn, error) {
-				return proxy.Dial(ctx, false, net, addr)
-			},
-			IdleConnTimeout: proxy.IdleTimeout,
-			// since we have one transport per downstream connection, we don't need
-			// more than this
-			MaxIdleConnsPerHost: 1,
+		var tr *http.Transport
+		if upstream != nil {
+			setUpstreamForAwareConn(fctx, upstream)
+			tr = &http.Transport{
+				DialContext: func(ctx context.Context, net, addr string) (net.Conn, error) {
+					// always use the supplied upstream connection, but don't allow it to
+					// be closed by the transport
+					return &noCloseConn{upstream}, nil
+				},
+				// this transport is only used once, don't keep any idle connections,
+				// however still allow the transport to close the connection after using
+				// it
+				MaxIdleConnsPerHost: -1,
+			}
+		} else {
+			tr = &http.Transport{
+				DialContext: func(ctx context.Context, net, addr string) (net.Conn, error) {
+					conn, err := proxy.Dial(ctx, false, net, addr)
+					if err == nil {
+						// On first dialing conn, handle RequestAware
+						setUpstreamForAwareConn(ctx, conn)
+						handleRequestAware(ctx)
+					}
+					return conn, err
+				},
+				IdleConnTimeout: proxy.IdleTimeout,
+				// since we have one transport per downstream connection, we don't need
+				// more than this
+				MaxIdleConnsPerHost: 1,
+			}
 		}
 
 		defer tr.CloseIdleConnections()
 		next = func(ctx filters.Context, modifiedReq *http.Request) (*http.Response, filters.Context, error) {
-			resp, err := tr.RoundTrip(prepareRequest(modifiedReq.WithContext(ctx)))
+			modifiedReq = modifiedReq.WithContext(ctx)
+			setRequestForAwareConn(ctx, modifiedReq)
+			handleRequestAware(ctx)
+			resp, err := tr.RoundTrip(prepareRequest(modifiedReq))
+			handleResponseAware(ctx, modifiedReq, resp, err)
 			return resp, ctx, err
 		}
 	}
@@ -98,6 +128,15 @@ func (proxy *proxy) processRequests(ctx filters.Context, remoteAddr string, req 
 	var err error
 
 	for {
+		if req.URL.Scheme == "" {
+			req.URL.Scheme = origURLScheme(ctx)
+		}
+		if req.URL.Host == "" {
+			req.URL.Host = origURLHost(ctx)
+		}
+		if req.Host == "" {
+			req.Host = origHost(ctx)
+		}
 		resp, ctx, err = proxy.Filter.Apply(ctx, req, next)
 		if err != nil && resp == nil {
 			resp = proxy.OnError(ctx, req, false, err)
@@ -125,10 +164,7 @@ func (proxy *proxy) processRequests(ctx filters.Context, remoteAddr string, req 
 		}
 
 		if isConnect {
-			if upstream != nil {
-				return proxy.copy(upstream, downstream)
-			}
-			return proxy.dialAndCopy(ctx, upstreamAddr, downstream)
+			return proxy.proceedWithConnect(ctx, req, upstreamAddr, upstream, downstream)
 		}
 
 		if req.Close {
@@ -160,6 +196,37 @@ func (proxy *proxy) processRequests(ctx filters.Context, remoteAddr string, req 
 		req.RemoteAddr = remoteAddr
 		req = req.WithContext(ctx)
 	}
+}
+
+func handleRequestAware(ctx context.Context) {
+	upstream := upstreamForAwareConn(ctx)
+	if upstream == nil {
+		return
+	}
+
+	netx.WalkWrapped(upstream, func(wrapped net.Conn) bool {
+		switch t := wrapped.(type) {
+		case RequestAware:
+			req := requestForAwareConn(ctx)
+			t.OnRequest(req)
+		}
+		return true
+	})
+}
+
+func handleResponseAware(ctx context.Context, req *http.Request, resp *http.Response, err error) {
+	upstream := upstreamForAwareConn(ctx)
+	if upstream == nil {
+		return
+	}
+
+	netx.WalkWrapped(upstream, func(wrapped net.Conn) bool {
+		switch t := wrapped.(type) {
+		case ResponseAware:
+			t.OnResponse(req, resp, err)
+		}
+		return true
+	})
 }
 
 func (proxy *proxy) writeResponse(downstream io.Writer, req *http.Request, resp *http.Response) error {
@@ -207,10 +274,11 @@ func prepareRequest(req *http.Request) *http.Request {
 
 	// Request URL
 	req.URL = cloneURL(req.URL)
-	// We know that is going to be HTTP always because HTTPS isn't forwarded.
-	// We need to hardcode it here because req.URL.Scheme can be undefined, since
-	// client request don't need to use absolute URIs
-	req.URL.Scheme = "http"
+	// If req.URL.Scheme was blank, it's http. Otherwise, it's https and we leave
+	// it alone.
+	if req.URL.Scheme == "" {
+		req.URL.Scheme = "http"
+	}
 	// We need to make sure the host is defined in the URL (not the actual URI)
 	req.URL.Host = req.Host
 
@@ -295,7 +363,7 @@ func isUnexpected(err error) bool {
 	}
 	// This is okay per the HTTP spec.
 	// See https://www.w3.org/Protocols/rfc2616/rfc2616-sec8.html#sec8.1.4
-	if err == idletiming.ErrIdled {
+	if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 		return false
 	}
 

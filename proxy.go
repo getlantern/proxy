@@ -6,9 +6,12 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"regexp"
 	"time"
 
+	"github.com/getlantern/errors"
 	"github.com/getlantern/golog"
+	"github.com/getlantern/mitm"
 	"github.com/getlantern/proxy/filters"
 )
 
@@ -31,6 +34,21 @@ type Proxy interface {
 
 	// Serve runs a server on the given Listener
 	Serve(l net.Listener) error
+}
+
+// RequestAware is an interface for connections that are able to modify requests
+// before they're sent on the connection.
+type RequestAware interface {
+	// OnRequest allows this connection to make modifications to the request as
+	// needed
+	OnRequest(req *http.Request)
+}
+
+// ResponseAware is an interface for connections that are interested in knowing
+// about responses received on the connection.
+type ResponseAware interface {
+	// OnResponse allows this connection to learn about responses
+	OnResponse(req *http.Request, resp *http.Response, err error)
 }
 
 // Opts defines options for configuring a Proxy
@@ -57,14 +75,28 @@ type Opts struct {
 
 	// Dial is the function that's used to dial upstream.
 	Dial DialFunc
+
+	// ShouldMITM is an optional function for determining whether or not the given
+	// HTTP CONNECT request to the given upstreamAddr is eligible for being MITM'ed.
+	ShouldMITM func(req *http.Request, upstreamAddr string) bool
+
+	// MITMOpts, if specified, instructs proxy to attempt to man-in-the-middle
+	// connections and handle them as an HTTP proxy. If the connection cannot be
+	// mitm'ed (e.g. Client Hello doesn't include an SNI header) or if the
+	// contents isn't HTTP, the connection is handled as normal without MITM.
+	MITMOpts *mitm.Opts
 }
 
 type proxy struct {
 	*Opts
+	mitmIC      *mitm.Interceptor
+	mitmDomains []*regexp.Regexp
 }
 
-// New creates a new Proxy configured with the specified Opts.
-func New(opts *Opts) Proxy {
+// New creates a new Proxy configured with the specified Opts. If there's an
+// error initializing MITM, this returns an mitmErr, however the proxy is still
+// usable (it just won't MITM).
+func New(opts *Opts) (newProxy Proxy, mitmErr error) {
 	if opts.Dial == nil {
 		opts.Dial = func(ctx context.Context, isCONNECT bool, network, addr string) (conn net.Conn, err error) {
 			timeout := 30 * time.Second
@@ -75,9 +107,30 @@ func New(opts *Opts) Proxy {
 			return net.DialTimeout(network, addr, timeout)
 		}
 	}
-	opts.applyHTTPDefaults()
-	opts.applyCONNECTDefaults()
-	return &proxy{opts}
+	p := &proxy{
+		Opts:        opts,
+		mitmDomains: make([]*regexp.Regexp, 0),
+	}
+	p.applyHTTPDefaults()
+	p.applyCONNECTDefaults()
+
+	if opts.MITMOpts != nil {
+		p.mitmIC, mitmErr = mitm.Configure(opts.MITMOpts)
+		if mitmErr != nil {
+			mitmErr = errors.New("Unable to configure MITM: %v", mitmErr)
+		} else {
+			for _, domain := range opts.MITMOpts.Domains {
+				re, err := domainToRegex(domain)
+				if err != nil {
+					log.Errorf("Unable to convert domain %v to regex: %v", domain, err)
+				} else {
+					p.mitmDomains = append(p.mitmDomains, re)
+				}
+			}
+		}
+	}
+
+	return p, mitmErr
 }
 
 // OnFirstOnly returns a filter that applies the given filter only on the first

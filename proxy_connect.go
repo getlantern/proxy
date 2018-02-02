@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -13,12 +14,13 @@ import (
 	"github.com/getlantern/lampshade"
 	"github.com/getlantern/netx"
 	"github.com/getlantern/proxy/filters"
+	"github.com/getlantern/reconn"
 )
 
 const (
 	connectRequest = "CONNECT %v HTTP/1.1\r\nHost: %v\r\n\r\n"
 
-	contextKeyNoRespondOkay = "noRespondOK"
+	maxHTTPSize = 2 << 15 // 64K
 )
 
 // BufferSource is a source for buffers used in reading/writing.
@@ -27,10 +29,21 @@ type BufferSource interface {
 	Put(buf []byte)
 }
 
-func (opts *Opts) applyCONNECTDefaults() {
+func (proxy *proxy) applyCONNECTDefaults() {
 	// Apply defaults
-	if opts.BufferSource == nil {
-		opts.BufferSource = &defaultBufferSource{}
+	if proxy.BufferSource == nil {
+		proxy.BufferSource = &defaultBufferSource{}
+	}
+	if proxy.ShouldMITM == nil {
+		proxy.ShouldMITM = proxy.defaultShouldMITM
+	} else {
+		orig := proxy.ShouldMITM
+		proxy.ShouldMITM = func(req *http.Request, upstreamAddr string) bool {
+			if !orig(req, upstreamAddr) {
+				return false
+			}
+			return proxy.defaultShouldMITM(req, upstreamAddr)
+		}
 	}
 }
 
@@ -44,17 +57,9 @@ type connectInterceptor struct {
 
 func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 	return func(ctx filters.Context, modifiedReq *http.Request) (*http.Response, filters.Context, error) {
-		suppressOK := ctx.Value(contextKeyNoRespondOkay) != nil
-
 		var resp *http.Response
-		nextCtx := ctx
-		respondOK := func() {
-			if !suppressOK {
-				resp, nextCtx, _ = filters.ShortCircuit(ctx, modifiedReq, &http.Response{
-					StatusCode: http.StatusOK,
-				})
-			}
-		}
+		upstreamAddr := modifiedReq.URL.Host
+		nextCtx := ctx.WithValue(ctxKeyUpstreamAddr, upstreamAddr)
 
 		if !proxy.OKWaitsForUpstream {
 			// We preemptively respond with an OK on the client. Some user agents like
@@ -67,15 +72,14 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 			// (mostly correctly) attribute that to a problem with the origin rather
 			// than the proxy and continue to consider the proxy good. See the extensive
 			// discussion here: https://github.com/getlantern/lantern/issues/5514.
-			respondOK()
-			nextCtx = nextCtx.WithValue(ctxKeyUpstreamAddr, modifiedReq.URL.Host)
+			resp, nextCtx = respondOK(resp, modifiedReq, nextCtx)
 			return resp, nextCtx, nil
 		}
 
 		// Note - for CONNECT requests, we use the Host from the request URL, not the
 		// Host header. See discussion here:
 		// https://ask.wireshark.org/questions/22988/http-host-header-with-and-without-port-number
-		upstream, err := proxy.Dial(ctx, true, "tcp", modifiedReq.URL.Host)
+		upstream, err := proxy.Dial(ctx, true, "tcp", upstreamAddr)
 		if err != nil {
 			if proxy.OKWaitsForUpstream {
 				return badGateway(ctx, modifiedReq, err)
@@ -90,37 +94,93 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 		// just in case that one is able to reach the origin. This is relevant,
 		// for example, if some proxy servers reside in jurisdictions where an
 		// origin site is blocked but other proxy servers don't.
-		respondOK()
+		resp, nextCtx = respondOK(resp, modifiedReq, nextCtx)
 		nextCtx = nextCtx.WithValue(ctxKeyUpstream, upstream)
 		return resp, nextCtx, nil
 	}
 }
 
+func respondOK(resp *http.Response, req *http.Request, ctx filters.Context) (*http.Response, filters.Context) {
+	suppressOK := ctx.Value(ctxKeyNoRespondOkay) != nil
+	if !suppressOK {
+		resp, ctx, _ = filters.ShortCircuit(ctx, req, &http.Response{
+			StatusCode: http.StatusOK,
+		})
+	}
+	return resp, ctx
+}
+
 func (proxy *proxy) Connect(ctx context.Context, in io.Reader, conn net.Conn, origin string) error {
 	pin := io.MultiReader(strings.NewReader(fmt.Sprintf(connectRequest, origin, origin)), in)
-	return proxy.Handle(context.WithValue(ctx, contextKeyNoRespondOkay, "true"), pin, conn)
+	return proxy.Handle(context.WithValue(ctx, ctxKeyNoRespondOkay, "true"), pin, conn)
 }
 
-func (proxy *proxy) dialAndCopy(ctx filters.Context, addr string, downstream net.Conn) error {
-	upstream, err := proxy.Dial(ctx, true, "tcp", addr)
-	if err != nil {
-		return err
+func (proxy *proxy) proceedWithConnect(ctx filters.Context, req *http.Request, upstreamAddr string, upstream net.Conn, downstream net.Conn) error {
+	if upstream == nil {
+		var dialErr error
+		upstream, dialErr = proxy.Dial(ctx, true, "tcp", upstreamAddr)
+		if dialErr != nil {
+			return dialErr
+		}
 	}
-	return proxy.copy(upstream, downstream)
-}
-
-func (proxy *proxy) copy(upstream, downstream net.Conn) error {
 	defer func() {
 		if closeErr := upstream.Close(); closeErr != nil {
 			log.Tracef("Error closing upstream connection: %s", closeErr)
 		}
 	}()
 
-	// Pipe data between the client and the proxy.
+	var rr io.Reader
+	if proxy.ShouldMITM(req, upstreamAddr) {
+		// Try to MITM the connection
+		downstreamMITM, upstreamMITM, mitming, err := proxy.mitmIC.MITM(downstream, upstream)
+		if err != nil {
+			log.Errorf("Unable to MITM %v: %v", upstreamAddr, err)
+			return errors.New("Unable to MITM connection: %v", err)
+		}
+		downstream = downstreamMITM
+		upstream = upstreamMITM
+		if mitming {
+			// Try to read HTTP request and process as HTTP assuming that requests
+			// (not including body) are always smaller than 65K. If this assumption is
+			// violated, we won't be able to process the data on this connection.
+			downstreamRR := reconn.Wrap(downstream, maxHTTPSize)
+			_, peekReqErr := http.ReadRequest(bufio.NewReader(downstreamRR))
+			var rrErr error
+			rr, rrErr = downstreamRR.Rereader()
+			if rrErr != nil {
+				// Reading request overflowed, abort
+				return errors.New("Unable to re-read data: %v", rrErr)
+			}
+			if peekReqErr == nil {
+				// Handle as HTTP, prepend already read HTTP request
+				fullDownstream := io.MultiReader(rr, downstream)
+				// Remove upstream info from context so that handle doesn't try to
+				// process this as a CONNECT
+				ctx = ctx.WithValue(ctxKeyUpstream, nil).WithValue(ctxKeyUpstreamAddr, nil)
+				ctx = ctx.WithMITMing()
+				return proxy.handle(ctx, fullDownstream, downstream, upstream)
+			}
+
+			// We couldn't read the first HTTP Request, fall back to piping data
+		}
+	}
+
+	// Prepare to pipe data between the client and the proxy.
 	bufOut := proxy.BufferSource.Get()
 	bufIn := proxy.BufferSource.Get()
 	defer proxy.BufferSource.Put(bufOut)
 	defer proxy.BufferSource.Put(bufIn)
+
+	if rr != nil {
+		// We tried and failed to MITM. First copy already read data to upstream
+		// before we start piping as usual
+		_, copyErr := io.CopyBuffer(upstream, rr, bufOut)
+		if copyErr != nil {
+			return errors.New("Error copying initial data to upstream: %v", copyErr)
+		}
+	}
+
+	// Pipe data between the client and the proxy.
 	writeErr, readErr := netx.BidiCopy(upstream, downstream, bufOut, bufIn)
 	if isUnexpected(readErr) {
 		return errors.New("Error piping data to downstream: %v", readErr)
@@ -144,4 +204,20 @@ func (dbs *defaultBufferSource) Get() []byte {
 
 func (dbs *defaultBufferSource) Put(buf []byte) {
 	// do nothing
+}
+
+func (proxy *proxy) defaultShouldMITM(req *http.Request, upstreamAddr string) bool {
+	if proxy.mitmIC == nil {
+		return false
+	}
+	host, _, err := net.SplitHostPort(upstreamAddr)
+	if err != nil {
+		return false
+	}
+	for _, mitmDomain := range proxy.mitmDomains {
+		if mitmDomain.MatchString(host) {
+			return true
+		}
+	}
+	return false
 }
