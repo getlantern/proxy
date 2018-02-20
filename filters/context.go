@@ -55,7 +55,7 @@ type Context interface {
 func WrapContext(ctx context.Context, downstream net.Conn) Context {
 	return (&ctext{ctx}).
 		WithValue(ctxKeyRequestNumber, 1).
-		WithValue(ctxKeyDownstream, downstream)
+		WithValue(ctxKeyDownstream, func() net.Conn { return downstream })
 }
 
 // AdaptContext adapts a context.Context to the Context interface.
@@ -75,7 +75,11 @@ type ctext struct {
 }
 
 func (ctx *ctext) DownstreamConn() net.Conn {
-	return ctx.Value(ctxKeyDownstream).(net.Conn)
+	downstreamConn := ctx.Value(ctxKeyDownstream).(func() net.Conn)
+	if downstreamConn == nil {
+		return nil
+	}
+	return downstreamConn()
 }
 
 func (ctx *ctext) RequestNumber() int {
