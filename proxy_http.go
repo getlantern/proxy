@@ -33,8 +33,28 @@ func (opts *Opts) applyHTTPDefaults() {
 }
 
 // Handle implements the interface Proxy
-func (proxy *proxy) Handle(ctx context.Context, downstreamIn io.Reader, downstream net.Conn) error {
-	return proxy.handle(ctx, downstreamIn, downstream, nil)
+func (proxy *proxy) Handle(ctx context.Context, downstreamIn io.Reader, downstream net.Conn) (err error) {
+	defer func() {
+		p := recover()
+		if p != nil {
+			safeClose(downstream)
+			err = errors.New("Recovered from panic handling connection: %v", p)
+		}
+	}()
+
+	err = proxy.handle(ctx, downstreamIn, downstream, nil)
+	return
+}
+
+func safeClose(conn net.Conn) {
+	defer func() {
+		p := recover()
+		if p != nil {
+			log.Errorf("Panic on closing connection: %v", p)
+		}
+	}()
+
+	conn.Close()
 }
 
 func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstream net.Conn, upstream net.Conn) error {
