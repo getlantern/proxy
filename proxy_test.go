@@ -128,6 +128,17 @@ func TestDialFailureCONNECTDontWaitForUpstream(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
 
+func TestPanicRecover(t *testing.T) {
+	p := newProxy(&Opts{
+		Filter: filters.FilterFunc(func(ctx filters.Context, req *http.Request, next filters.Next) (*http.Response, filters.Context, error) {
+			panic(errors.New("I'm panicking!"))
+		}),
+	})
+	req, _ := http.NewRequest("GET", "http://thehost:123", nil)
+	_, _, handleErr := roundTrip(p, req)
+	assert.True(t, strings.Contains(handleErr.Error(), "I'm panicking"), "Panic should have propagated as error")
+}
+
 func TestConnectWaitForUpstream(t *testing.T) {
 	doTestConnect(t, true)
 }
