@@ -3,6 +3,7 @@ package proxy
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"net"
@@ -15,6 +16,7 @@ import (
 	"github.com/getlantern/netx"
 	"github.com/getlantern/preconn"
 	"github.com/getlantern/proxy/filters"
+	"go.opencensus.io/trace"
 )
 
 func (opts *Opts) applyHTTPDefaults() {
@@ -130,6 +132,8 @@ func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstre
 
 		defer tr.CloseIdleConnections()
 		next = func(ctx filters.Context, modifiedReq *http.Request) (*http.Response, filters.Context, error) {
+			_, span := trace.StartSpan(context.Background(), fmt.Sprintf("go: %v", modifiedReq.Host))
+			defer span.End()
 			modifiedReq = modifiedReq.WithContext(ctx)
 			setRequestForAwareConn(ctx, modifiedReq)
 			handleRequestAware(ctx)
