@@ -132,7 +132,7 @@ func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstre
 
 		defer tr.CloseIdleConnections()
 		next = func(ctx filters.Context, modifiedReq *http.Request) (*http.Response, filters.Context, error) {
-			_, span := trace.StartSpan(context.Background(), fmt.Sprintf("http:%v", modifiedReq.Host))
+			_, span := trace.StartSpan(context.Background(), fmt.Sprintf("http roundtrip:%v", modifiedReq.Host))
 			defer span.End()
 			modifiedReq = modifiedReq.WithContext(ctx)
 			setRequestForAwareConn(ctx, modifiedReq)
