@@ -77,7 +77,7 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 			return resp, nextCtx, nil
 		}
 
-		_, span := trace.StartSpan(context.Background(), fmt.Sprintf("connect dial:%v", modifiedReq.Host))
+		_, span := trace.StartSpan(ctx, fmt.Sprintf("connect dial:%v", modifiedReq.Host))
 		defer span.End()
 
 		// Note - for CONNECT requests, we use the Host from the request URL, not the
@@ -116,7 +116,7 @@ func (proxy *proxy) Connect(ctx context.Context, in io.Reader, conn net.Conn, or
 }
 
 func (proxy *proxy) proceedWithConnect(ctx filters.Context, req *http.Request, upstreamAddr string, upstream net.Conn, downstream net.Conn) error {
-	_, span := trace.StartSpan(context.Background(), fmt.Sprintf("connect roundtrip:%v", req.Host))
+	_, span := trace.StartSpan(ctx, fmt.Sprintf("connect roundtrip:%v", req.Host))
 	defer span.End()
 	if upstream == nil {
 		var dialErr error
