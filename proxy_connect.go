@@ -15,6 +15,7 @@ import (
 	"github.com/getlantern/netx"
 	"github.com/getlantern/proxy/filters"
 	"github.com/getlantern/reconn"
+	"go.opencensus.io/trace"
 )
 
 const (
@@ -76,16 +77,15 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 			return resp, nextCtx, nil
 		}
 
+		_, span := trace.StartSpan(context.Background(), fmt.Sprintf("connect:%v", modifiedReq.Host))
+		defer span.End()
+
 		// Note - for CONNECT requests, we use the Host from the request URL, not the
 		// Host header. See discussion here:
 		// https://ask.wireshark.org/questions/22988/http-host-header-with-and-without-port-number
 		upstream, err := proxy.Dial(ctx, true, "tcp", upstreamAddr)
 		if err != nil {
-			if proxy.OKWaitsForUpstream {
-				return badGateway(ctx, modifiedReq, err)
-			}
-			log.Error(err)
-			return nil, ctx, err
+			return badGateway(ctx, modifiedReq, err)
 		}
 
 		// In this case, waited to successfully dial upstream before responding
