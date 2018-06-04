@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"io"
 	"io/ioutil"
@@ -300,12 +301,15 @@ func (proxy *proxy) writeResponse(downstream io.Writer, req *http.Request, resp 
 		resp = prepareResponse(resp, belowHTTP11)
 		proxy.addIdleKeepAlive(resp.Header)
 	}
-	err := resp.Write(out)
+	var buffer bytes.Buffer
+	mw := io.MultiWriter(out, &buffer)
+	err := resp.Write(mw)
 	// resp.Write closes the body only if it's successfully sent. Close
 	// manually when error happens.
 	if err != nil && resp.Body != nil {
 		resp.Body.Close()
 	}
+	log.Debugf("Wrote response:\n%v", buffer.String())
 	return err
 }
 
