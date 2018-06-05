@@ -37,8 +37,12 @@ func (proxy *proxy) Handle(ctx context.Context, downstreamIn io.Reader, downstre
 			err = errors.New("Recovered from panic handling connection: %v", p)
 		}
 	}()
+	var buffer bytes.Buffer
+	err = proxy.handle(context.WithValue(ctx, "buffer", &buffer), downstreamIn, downstream, nil)
+	if buffer.Len() > 0 && buffer.Len() < 300 {
+		log.Debugf("Response wrote on the wire:\n***\n%s\n***", buffer.String())
+	}
 
-	err = proxy.handle(ctx, downstreamIn, downstream, nil)
 	return
 }
 
@@ -192,7 +196,9 @@ func (proxy *proxy) processRequests(ctx filters.Context, remoteAddr string, req 
 		}
 
 		if resp != nil {
-			writeErr := proxy.writeResponse(downstream, req, resp)
+			buffer := ctx.Value("buffer").(*bytes.Buffer)
+			ds := io.MultiWriter(downstream, buffer)
+			writeErr := proxy.writeResponse(ds, req, resp)
 			if writeErr != nil {
 				if isUnexpected(writeErr) {
 					return log.Errorf("Unable to write response to downstream: %v", writeErr)
