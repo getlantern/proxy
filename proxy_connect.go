@@ -84,7 +84,6 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 			if proxy.OKWaitsForUpstream {
 				return badGateway(ctx, modifiedReq, err)
 			}
-			log.Error(err)
 			return nil, ctx, err
 		}
 
