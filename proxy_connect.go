@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/getlantern/errors"
 	"github.com/getlantern/lampshade"
 	"github.com/getlantern/netx"
 	"github.com/getlantern/proxy/filters"
@@ -133,8 +132,7 @@ func (proxy *proxy) proceedWithConnect(ctx filters.Context, req *http.Request, u
 		// Try to MITM the connection
 		downstreamMITM, upstreamMITM, mitming, err := proxy.mitmIC.MITM(downstream, upstream)
 		if err != nil {
-			log.Errorf("Unable to MITM %v: %v", upstreamAddr, err)
-			return errors.New("Unable to MITM connection: %v", err)
+			return log.Errorf("Unable to MITM connection: %v", err)
 		}
 		downstream = downstreamMITM
 		upstream = upstreamMITM
@@ -148,7 +146,7 @@ func (proxy *proxy) proceedWithConnect(ctx filters.Context, req *http.Request, u
 			rr, rrErr = downstreamRR.Rereader()
 			if rrErr != nil {
 				// Reading request overflowed, abort
-				return errors.New("Unable to re-read data: %v", rrErr)
+				return log.Errorf("Unable to re-read data: %v", rrErr)
 			}
 			if peekReqErr == nil {
 				// Handle as HTTP, prepend already read HTTP request
@@ -175,16 +173,16 @@ func (proxy *proxy) proceedWithConnect(ctx filters.Context, req *http.Request, u
 		// before we start piping as usual
 		_, copyErr := io.CopyBuffer(upstream, rr, bufOut)
 		if copyErr != nil {
-			return errors.New("Error copying initial data to upstream: %v", copyErr)
+			return log.Errorf("Error copying initial data to upstream: %v", copyErr)
 		}
 	}
 
 	// Pipe data between the client and the proxy.
 	writeErr, readErr := netx.BidiCopy(upstream, downstream, bufOut, bufIn)
 	if isUnexpected(readErr) {
-		return errors.New("Error piping data to downstream: %v", readErr)
+		return log.Errorf("Error piping data to downstream: %v", readErr)
 	} else if isUnexpected(writeErr) {
-		return errors.New("Error piping data to upstream: %v", writeErr)
+		return log.Errorf("Error piping data to upstream: %v", writeErr)
 	}
 	return nil
 }
