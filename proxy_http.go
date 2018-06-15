@@ -81,13 +81,14 @@ func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstre
 				WithValue(ctxKeyOrigHost, req.Host)
 		}
 	}
+
 	if err != nil {
 		if isUnexpected(err) {
 			errResp := proxy.OnError(fctx, req, true, err)
 			if errResp != nil {
 				proxy.writeResponse(downstream, req, errResp)
 			}
-			return log.Errorf("Error in initial ReadRequest: %v", err)
+			return log.Errorf("Error in initial ReadRequest: %v to "+downstream.LocalAddr().String()+" from "+downstream.RemoteAddr().String(), err)
 		}
 		return nil
 	}
