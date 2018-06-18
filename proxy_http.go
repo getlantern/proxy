@@ -57,6 +57,20 @@ func safeClose(conn net.Conn) {
 	conn.Close()
 }
 
+func (proxy *proxy) initialReadError(downstream net.Conn) string {
+	loc := downstream.LocalAddr()
+	l := ""
+	if loc != nil {
+		l = loc.String()
+	}
+	rem := downstream.RemoteAddr()
+	r := ""
+	if rem != nil {
+		l = rem.String()
+	}
+	return "Error in initial ReadRequest: %v to " + l + " from " + r
+}
+
 func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstream net.Conn, upstream net.Conn) error {
 	defer func() {
 		if closeErr := downstream.Close(); closeErr != nil {
@@ -88,7 +102,8 @@ func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstre
 			if errResp != nil {
 				proxy.writeResponse(downstream, req, errResp)
 			}
-			return log.Errorf("Error in initial ReadRequest: %v to "+downstream.LocalAddr().String()+" from "+downstream.RemoteAddr().String(), err)
+
+			return log.Errorf(proxy.initialReadError(downstream), err)
 		}
 		return nil
 	}
