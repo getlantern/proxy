@@ -15,6 +15,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -371,9 +372,9 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 		w.Write([]byte(req.Host))
 	}))
 
-	requestNumber := 0
+	requestNumber := int64(0)
 	dial := func(ctx context.Context, isConnect bool, network, addr string) (conn net.Conn, err error) {
-		requestNumber = filters.AdaptContext(ctx).RequestNumber()
+		atomic.StoreInt64(&requestNumber, int64(filters.AdaptContext(ctx).RequestNumber()))
 		if requestMethod == http.MethodGet {
 			conn, err = tls.Dial("tcp", l.Addr().String(), &tls.Config{
 				ServerName: "localhost",
@@ -491,7 +492,7 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 		assert.Regexp(t, "timeout=\\d+", resp.Header.Get("Keep-Alive"), "All HTTP responses' headers should contain a Keep-Alive timeout")
 		assert.Equal(t, testHeaderValue, resp.Header.Get(testRespHeader))
 	}
-	assert.Equal(t, expectedRequestNumber, requestNumber)
+	assert.EqualValues(t, expectedRequestNumber, atomic.LoadInt64(&requestNumber))
 	if !includeFirst {
 		expectedRequestNumber++
 	}
@@ -529,7 +530,7 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 		assert.Equal(t, testHeaderValue, resp.Header.Get(testRespAwareHeader))
 		expectedRequestNumber++
 	}
-	assert.Equal(t, expectedRequestNumber, requestNumber)
+	assert.EqualValues(t, expectedRequestNumber, atomic.LoadInt64(&requestNumber))
 
 	nestedReq2Body := []byte("My Request")
 	nestedReq2, _ := http.NewRequest("POST", "http://subdomain3.thehost/b", ioutil.NopCloser(bytes.NewBuffer(nestedReq2Body)))
@@ -546,7 +547,7 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 		assert.Equal(t, testHeaderValue, resp.Header.Get(testRespAwareHeader))
 		expectedRequestNumber++
 	}
-	assert.Equal(t, expectedRequestNumber, requestNumber)
+	assert.EqualValues(t, expectedRequestNumber, atomic.LoadInt64(&requestNumber))
 
 	expectedConnections := 3
 	if discardFirstRequest {
