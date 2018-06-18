@@ -66,7 +66,7 @@ func TestDialFailureHTTP(t *testing.T) {
 		},
 	})
 	req, _ := http.NewRequest("GET", "http://thehost:123", nil)
-	resp, roundTripErr, handleErr := roundTrip(p, req)
+	resp, roundTripErr, handleErr := roundTrip(p, req, true)
 	if !assert.NoError(t, roundTripErr) {
 		return
 	}
@@ -75,11 +75,48 @@ func TestDialFailureHTTP(t *testing.T) {
 	}
 	assert.Equal(t, "thehost:123", d.LastDialed(), "Should have used specified port of 123")
 	assert.Equal(t, http.StatusBadGateway, resp.StatusCode)
+	assert.True(t, resp.Close, "Response should indicate that the connection is closing")
 	body, err := ioutil.ReadAll(resp.Body)
 	if !assert.NoError(t, err) {
 		return
 	}
-	assert.Equal(t, errorText, string(body))
+	assert.True(t, strings.Contains(string(body), errorText))
+}
+
+func TestWriteFailure(t *testing.T) {
+	errorText := "I don't want to write"
+	p := newProxy(&Opts{
+		Dial: func(context context.Context, isConnect bool, net, addr string) (net.Conn, error) {
+			return mockconn.NewConn(nil, nil, nil, errors.New(errorText)), nil
+		},
+	})
+	req, _ := http.NewRequest("GET", "http://thehost:123", nil)
+	_, roundTripErr, handleErr := roundTrip(p, req, false)
+	if !assert.NoError(t, roundTripErr) {
+		return
+	}
+	if !assert.Error(t, handleErr, "Should have gotten error on handling request") {
+		return
+	}
+	assert.True(t, strings.Contains(handleErr.Error(), "Unable to round-trip http request to upstream"))
+}
+
+func TestReadFailure(t *testing.T) {
+	errorText := "I don't want to read"
+	p := newProxy(&Opts{
+		Dial: func(context context.Context, isConnect bool, net, addr string) (net.Conn, error) {
+			return mockconn.NewConn(nil, nil, errors.New(errorText), nil), nil
+		},
+	})
+	req, _ := http.NewRequest("GET", "http://thehost:123", nil)
+	_, roundTripErr, handleErr := roundTrip(p, req, false)
+	if !assert.NoError(t, roundTripErr) {
+		return
+	}
+	if !assert.Error(t, handleErr, "Should have gotten error on handling request") {
+		return
+	}
+	assert.True(t, strings.Contains(handleErr.Error(), "Unable to round-trip http request to upstream"))
 }
 
 func TestDialFailureCONNECTWaitForUpstream(t *testing.T) {
@@ -92,7 +129,7 @@ func TestDialFailureCONNECTWaitForUpstream(t *testing.T) {
 		},
 	})
 	req, _ := http.NewRequest("CONNECT", "http://thehost:123", nil)
-	resp, roundTripErr, handleErr := roundTrip(p, req)
+	resp, roundTripErr, handleErr := roundTrip(p, req, true)
 	if !assert.NoError(t, roundTripErr) {
 		return
 	}
@@ -118,7 +155,7 @@ func TestDialFailureCONNECTDontWaitForUpstream(t *testing.T) {
 		},
 	})
 	req, _ := http.NewRequest("CONNECT", "http://thehost:123", nil)
-	resp, roundTripErr, handleErr := roundTrip(p, req)
+	resp, roundTripErr, handleErr := roundTrip(p, req, true)
 	if !assert.NoError(t, roundTripErr) {
 		return
 	}
@@ -136,7 +173,7 @@ func TestPanicRecover(t *testing.T) {
 		}),
 	})
 	req, _ := http.NewRequest("GET", "http://thehost:123", nil)
-	_, _, handleErr := roundTrip(p, req)
+	_, _, handleErr := roundTrip(p, req, true)
 	assert.True(t, strings.Contains(handleErr.Error(), "I'm panicking"), "Panic should have propagated as error")
 }
 
@@ -193,7 +230,7 @@ func TestShortCircuitHTTP(t *testing.T) {
 		}),
 	})
 	req, _ := http.NewRequest(http.MethodGet, "http://thehost:123", nil)
-	resp, roundTripErr, handleErr := roundTrip(p, req)
+	resp, roundTripErr, handleErr := roundTrip(p, req, true)
 	if !assert.NoError(t, roundTripErr) {
 		return
 	}
@@ -213,7 +250,7 @@ func TestShortCircuitCONNECT(t *testing.T) {
 		}),
 	})
 	req, _ := http.NewRequest(http.MethodConnect, "http://thehost:123", nil)
-	resp, roundTripErr, handleErr := roundTrip(p, req)
+	resp, roundTripErr, handleErr := roundTrip(p, req, true)
 	if !assert.NoError(t, roundTripErr) {
 		return
 	}
@@ -569,7 +606,7 @@ func newProxy(opts *Opts) Proxy {
 	return p
 }
 
-func roundTrip(p Proxy, req *http.Request) (resp *http.Response, roundTripErr error, handleErr error) {
+func roundTrip(p Proxy, req *http.Request, readResponse bool) (resp *http.Response, roundTripErr error, handleErr error) {
 	toSend := &bytes.Buffer{}
 	roundTripErr = req.Write(toSend)
 	if roundTripErr != nil {
@@ -578,7 +615,9 @@ func roundTrip(p Proxy, req *http.Request) (resp *http.Response, roundTripErr er
 	received := &bytes.Buffer{}
 	conn := mockconn.New(received, toSend)
 	handleErr = p.Handle(context.Background(), conn, conn)
-	resp, roundTripErr = http.ReadResponse(bufio.NewReader(bytes.NewReader(received.Bytes())), req)
+	if readResponse {
+		resp, roundTripErr = http.ReadResponse(bufio.NewReader(bytes.NewReader(received.Bytes())), req)
+	}
 	return
 }
 
