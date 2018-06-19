@@ -151,6 +151,9 @@ func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstre
 			handleRequestAware(ctx)
 			resp, err := tr.RoundTrip(prepareRequest(modifiedReq))
 			handleResponseAware(ctx, modifiedReq, resp, err)
+			if err != nil {
+				err = errors.New("Unable to round-trip http request to upstream: %v", err)
+			}
 			return resp, ctx, err
 		}
 	}
@@ -176,6 +179,10 @@ func (proxy *proxy) processRequests(ctx filters.Context, remoteAddr string, req 
 		resp, ctx, err = proxy.Filter.Apply(ctx, req, next)
 		if err != nil && resp == nil {
 			resp = proxy.OnError(ctx, req, false, err)
+			if resp != nil {
+				// On error, we will always close the connection
+				resp.Close = true
+			}
 		}
 
 		if resp != nil {
@@ -187,6 +194,11 @@ func (proxy *proxy) processRequests(ctx filters.Context, remoteAddr string, req 
 				// Error is not unexpected, but we're done
 				return err
 			}
+		}
+
+		if err != nil {
+			// We encountered an error on round-tripping, stop now
+			return err
 		}
 
 		upstream := upstreamConn(ctx)
