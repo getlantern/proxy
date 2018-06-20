@@ -25,11 +25,6 @@ func (opts *Opts) applyHTTPDefaults() {
 	if opts.OnError == nil {
 		opts.OnError = defaultOnError
 	}
-	if opts.IdleTimeout > 0 {
-		opts.Filter = filters.Join(filters.FilterFunc(func(ctx filters.Context, req *http.Request, next filters.Next) (*http.Response, filters.Context, error) {
-			return next(ctx, req)
-		}), opts.Filter)
-	}
 }
 
 // Handle implements the interface Proxy
@@ -57,7 +52,7 @@ func safeClose(conn net.Conn) {
 	conn.Close()
 }
 
-func (proxy *proxy) initialReadError(downstream net.Conn) string {
+func (proxy *proxy) logInitialReadError(downstream net.Conn, err error) error {
 	loc := downstream.LocalAddr()
 	l := ""
 	if loc != nil {
@@ -66,9 +61,9 @@ func (proxy *proxy) initialReadError(downstream net.Conn) string {
 	rem := downstream.RemoteAddr()
 	r := ""
 	if rem != nil {
-		l = rem.String()
+		r = rem.String()
 	}
-	return "Error in initial ReadRequest: %v to " + l + " from " + r
+	return log.Errorf("Error in initial ReadRequest from %v to %v: %v", r, l, err)
 }
 
 func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstream net.Conn, upstream net.Conn) error {
@@ -103,7 +98,7 @@ func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstre
 				proxy.writeResponse(downstream, req, errResp)
 			}
 
-			return log.Errorf(proxy.initialReadError(downstream), err)
+			return proxy.logInitialReadError(downstream, err)
 		}
 		return nil
 	}
