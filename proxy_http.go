@@ -63,7 +63,7 @@ func (proxy *proxy) logInitialReadError(downstream net.Conn, err error) error {
 	if rem != nil {
 		r = rem.String()
 	}
-	return log.Errorf("Error in initial ReadRequest from %v to %v: %v", r, l, err)
+	return log.Errorf("Initial ReadRequest: %v from %v to %v", err, r, l)
 }
 
 func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstream net.Conn, upstream net.Conn) error {
