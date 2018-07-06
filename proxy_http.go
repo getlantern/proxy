@@ -59,13 +59,12 @@ func (proxy *proxy) logInitialReadError(downstream net.Conn, err error) error {
 		r = rem.String()
 	}
 	// Ignore our generated error that should have already been reported.
-	if !strings.HasPrefix(err.Error(), "Client Hello has no cipher suites") {
-		// These errors should all typically be internal go errors, typically with
-		// TLS. We don't add our own messaging here to make it more likely we and
-		// stackdriver can properly group them.
-		return log.Errorf("%v from %s", err, r)
+	if strings.HasPrefix(err.Error(), "Client Hello has no cipher suites") {
+		log.Debugf("No cipher suites in common -- old Lantern client")
+		return err
 	}
-	return err
+	// These errors should all typically be internal go errors, typically with TLS.
+	return log.Errorf("Initial ReadRequest: %v from %v", err, r)
 }
 
 func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstream net.Conn, upstream net.Conn) error {
