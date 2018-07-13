@@ -25,6 +25,7 @@ import (
 	"github.com/getlantern/mockconn"
 	"github.com/getlantern/proxy/filters"
 	"github.com/getlantern/tlsdefaults"
+	"github.com/mitchellh/go-server-timing"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -117,6 +118,35 @@ func TestReadFailure(t *testing.T) {
 		return
 	}
 	assert.True(t, strings.Contains(handleErr.Error(), "Unable to round-trip http request to upstream"))
+}
+
+func TestSendsServerTiming(t *testing.T) {
+	d := mockconn.SlowDialer(mockconn.SucceedingDialer([]byte{}), 10*time.Millisecond)
+	p := newProxy(&Opts{
+		OKWaitsForUpstream:  true,
+		OKSendsServerTiming: true,
+		Dial: func(ctx context.Context, isConnect bool, net, addr string) (net.Conn, error) {
+			return d.Dial(net, addr)
+		},
+	})
+	req, _ := http.NewRequest("CONNECT", "http://thehost:123", nil)
+	resp, roundTripErr, handleErr := roundTrip(p, req, true)
+	if !assert.NoError(t, roundTripErr) {
+		return
+	}
+	if !assert.NoError(t, handleErr) {
+		return
+	}
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	timing := resp.Header.Get(serverTimingHeader)
+	assert.NotEmpty(t, timing, "should get Server-Timing header")
+	hdr, err := servertiming.ParseHeader(timing)
+	if !assert.NoError(t, err) {
+		return
+	}
+	metric := hdr.Metrics[0]
+	assert.Equal(t, MetricDialUpstream, metric.Name)
+	assert.InDelta(t, int64(10*time.Millisecond), int64(metric.Duration), float64(2*time.Millisecond))
 }
 
 func TestDialFailureCONNECTWaitForUpstream(t *testing.T) {
