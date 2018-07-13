@@ -58,12 +58,20 @@ func (proxy *proxy) logInitialReadError(downstream net.Conn, err error) error {
 	if rem != nil {
 		r = rem.String()
 	}
+	txt := err.Error()
 	// Ignore our generated error that should have already been reported.
-	if strings.HasPrefix(err.Error(), "Client Hello has no cipher suites") {
+	if strings.HasPrefix(txt, "Client Hello has no cipher suites") {
 		log.Debugf("No cipher suites in common -- old Lantern client")
 		return err
 	}
-	// These errors should all typically be internal go errors, typically with TLS.
+	// These errors should all typically be internal go errors, typically with TLS. Break them up
+	// for stackdriver grouping.
+	if strings.Contains(txt, "oversized") {
+		return log.Errorf("Oversized record on initial read: %v from %v", err, r)
+	}
+	if strings.Contains(txt, "first record does not") {
+		return log.Errorf("Not a TLS client connection: %v from %v", err, r)
+	}
 	return log.Errorf("Initial ReadRequest: %v from %v", err, r)
 }
 
@@ -82,7 +90,7 @@ func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstre
 	if req != nil {
 		remoteAddr := downstream.RemoteAddr()
 		if remoteAddr != nil {
-			req.RemoteAddr = downstream.RemoteAddr().String()
+			req.RemoteAddr = remoteAddr.String()
 		}
 		if origURLScheme(ctx) == "" {
 			fctx = fctx.
