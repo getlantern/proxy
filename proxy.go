@@ -15,6 +15,10 @@ import (
 	"github.com/getlantern/proxy/filters"
 )
 
+const (
+	ServerTimingHeader = "Server-Timing"
+)
+
 var (
 	log = golog.LoggerFor("proxy")
 )
@@ -72,6 +76,11 @@ type Opts struct {
 	// OKWaitsForUpstream specifies whether or not to wait on dialing upstream
 	// before responding OK to a CONNECT request (CONNECT only).
 	OKWaitsForUpstream bool
+	// OKSendsServerTiming specifies whether or not to send back Server-Timing header
+	// when responding OK to CONNECT request (valid only if OKWaitsForUpstream is true).
+	// See https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Server-Timing.
+	// The only metric for now is dialupstream, so the value is in the form "dialupstream;dur=42".
+	OKSendsServerTiming bool
 
 	// Dial is the function that's used to dial upstream.
 	Dial DialFunc

@@ -75,6 +75,11 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 			return resp, nextCtx, nil
 		}
 
+		var start time.Time
+		if proxy.OKSendsServerTiming {
+			start = time.Now()
+		}
+
 		// Note - for CONNECT requests, we use the Host from the request URL, not the
 		// Host header. See discussion here:
 		// https://ask.wireshark.org/questions/22988/http-host-header-with-and-without-port-number
@@ -93,6 +98,11 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 		// for example, if some proxy servers reside in jurisdictions where an
 		// origin site is blocked but other proxy servers don't.
 		resp, nextCtx = respondOK(resp, modifiedReq, nextCtx)
+		if proxy.OKSendsServerTiming {
+			millis := fmt.Sprintf("dialupstream;dur=%d", time.Since(start)/time.Millisecond)
+			resp.Header.Add(ServerTimingHeader, millis)
+		}
+
 		nextCtx = nextCtx.WithValue(ctxKeyUpstream, upstream)
 		return resp, nextCtx, nil
 	}
