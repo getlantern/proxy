@@ -100,7 +100,7 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 		resp, nextCtx = respondOK(resp, modifiedReq, nextCtx)
 		if proxy.OKSendsServerTiming {
 			millis := fmt.Sprintf("dialupstream;dur=%d", time.Since(start)/time.Millisecond)
-			resp.Header.Add(ServerTimingHeader, millis)
+			resp.Header.Add(serverTimingHeader, millis)
 		}
 
 		nextCtx = nextCtx.WithValue(ctxKeyUpstream, upstream)

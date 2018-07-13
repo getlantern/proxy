@@ -138,14 +138,14 @@ func TestSendsServerTiming(t *testing.T) {
 		return
 	}
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	timing := resp.Header.Get(ServerTimingHeader)
+	timing := resp.Header.Get(serverTimingHeader)
 	assert.NotEmpty(t, timing, "should get Server-Timing header")
 	hdr, err := servertiming.ParseHeader(timing)
 	if !assert.NoError(t, err) {
 		return
 	}
 	metric := hdr.Metrics[0]
-	assert.Equal(t, "dialupstream", metric.Name)
+	assert.Equal(t, MetricDialUpstream, metric.Name)
 	assert.InDelta(t, int64(10*time.Millisecond), int64(metric.Duration), float64(2*time.Millisecond))
 }
 

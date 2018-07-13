@@ -16,7 +16,11 @@ import (
 )
 
 const (
-	ServerTimingHeader = "Server-Timing"
+	serverTimingHeader = "Server-Timing"
+
+	// MetricDialUpstream is the Server-Timing metric to record milliseconds to
+	// dial upstream site when handling a CONNECT request.
+	MetricDialUpstream = "dialupstream"
 )
 
 var (
