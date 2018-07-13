@@ -184,6 +184,7 @@ func (proxy *proxy) processRequests(ctx filters.Context, remoteAddr string, req 
 		if err != nil && resp == nil {
 			resp = proxy.OnError(ctx, req, false, err)
 			if resp != nil {
+				log.Debugf("Closing client connection on error: %v", err)
 				// On error, we will always close the connection
 				resp.Close = true
 			}
