@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -83,7 +84,9 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 		// Note - for CONNECT requests, we use the Host from the request URL, not the
 		// Host header. See discussion here:
 		// https://ask.wireshark.org/questions/22988/http-host-header-with-and-without-port-number
-		upstream, err := proxy.Dial(ctx, true, "tcp", upstreamAddr)
+		dialCtx, cancelDial := addDialDeadlineIfNecessary(ctx, modifiedReq)
+		upstream, err := proxy.Dial(dialCtx, true, "tcp", upstreamAddr)
+		cancelDial()
 		if err != nil {
 			if proxy.OKWaitsForUpstream {
 				return badGateway(ctx, modifiedReq, err)
@@ -106,6 +109,30 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 		nextCtx = nextCtx.WithValue(ctxKeyUpstream, upstream)
 		return resp, nextCtx, nil
 	}
+}
+
+func addDialDeadlineIfNecessary(ctx context.Context, req *http.Request) (context.Context, context.CancelFunc) {
+	timeoutString := req.Header.Get(DialTimeoutHeader)
+	if timeoutString == "" {
+		return ctx, noopCancel
+	}
+
+	timeoutInt, err := strconv.ParseInt(timeoutString, 10, 64)
+	if err != nil {
+		log.Errorf("Invalid %v, expected integer, got '%v'", DialTimeoutHeader, timeoutString)
+		return ctx, noopCancel
+	}
+
+	newDeadline := time.Now().Add(time.Duration(timeoutInt) * time.Millisecond)
+	existingDeadline, contextHasDeadline := ctx.Deadline()
+	if contextHasDeadline && existingDeadline.Before(newDeadline) {
+		return ctx, noopCancel
+	}
+
+	return context.WithDeadline(ctx, newDeadline)
+}
+
+func noopCancel() {
 }
 
 func respondOK(resp *http.Response, req *http.Request, ctx filters.Context) (*http.Response, filters.Context) {

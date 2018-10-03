@@ -666,3 +666,35 @@ func (conn *testConn) OnResponse(req *http.Request, resp *http.Response, err err
 func (conn *testConn) Wrapped() net.Conn {
 	return conn.Conn
 }
+
+func TestAddDialDeadlineIfNecessary(t *testing.T) {
+	ctx := context.Background()
+
+	req, _ := http.NewRequest(http.MethodGet, "https://www.google.com", nil)
+	newCtx, cancel := addDialDeadlineIfNecessary(ctx, req)
+	_, hasDeadline := newCtx.Deadline()
+	cancel()
+	assert.False(t, hasDeadline, "Context from request with no dial timeout header should have no deadline")
+
+	req.Header.Set(DialTimeoutHeader, "blah")
+	newCtx, cancel = addDialDeadlineIfNecessary(ctx, req)
+	_, hasDeadline = newCtx.Deadline()
+	cancel()
+	assert.False(t, hasDeadline, "Context from request with invalid dial timeout header should have no deadline")
+
+	defaultDeadline := time.Now().Add(30 * time.Second)
+	ctx, mainCancel := context.WithDeadline(context.Background(), defaultDeadline)
+	defer mainCancel()
+
+	req.Header.Set(DialTimeoutHeader, "60000")
+	newCtx, cancel = addDialDeadlineIfNecessary(ctx, req)
+	deadline, _ := newCtx.Deadline()
+	cancel()
+	assert.Equal(t, defaultDeadline, deadline, "Context from request with future dial timeout header should keep original deadline")
+
+	req.Header.Set(DialTimeoutHeader, "1")
+	newCtx, cancel = addDialDeadlineIfNecessary(ctx, req)
+	deadline, _ = newCtx.Deadline()
+	cancel()
+	assert.True(t, deadline.Before(defaultDeadline), "Context from request with near dial timeout header should get this near deadline")
+}
