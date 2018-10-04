@@ -73,6 +73,9 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 			// than the proxy and continue to consider the proxy good. See the extensive
 			// discussion here: https://github.com/getlantern/lantern/issues/5514.
 			resp, nextCtx = respondOK(resp, modifiedReq, nextCtx)
+			if proxy.OKSendsServerTiming {
+				addDialUpstreamHeader(resp, 0)
+			}
 			return resp, nextCtx, nil
 		}
 
@@ -102,13 +105,16 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 		// origin site is blocked but other proxy servers don't.
 		resp, nextCtx = respondOK(resp, modifiedReq, nextCtx)
 		if proxy.OKSendsServerTiming {
-			millis := fmt.Sprintf("dialupstream;dur=%d", time.Since(start)/time.Millisecond)
-			resp.Header.Add(serverTimingHeader, millis)
+			addDialUpstreamHeader(resp, time.Since(start))
 		}
 
 		nextCtx = nextCtx.WithValue(ctxKeyUpstream, upstream)
 		return resp, nextCtx, nil
 	}
+}
+
+func addDialUpstreamHeader(resp *http.Response, duration time.Duration) {
+	resp.Header.Add(serverTimingHeader, fmt.Sprintf("dialupstream;dur=%d", duration/time.Millisecond))
 }
 
 func addDialDeadlineIfNecessary(ctx context.Context, req *http.Request) (context.Context, context.CancelFunc) {
