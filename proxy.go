@@ -86,7 +86,7 @@ type Opts struct {
 	// before responding OK to a CONNECT request (CONNECT only).
 	OKWaitsForUpstream bool
 	// OKSendsServerTiming specifies whether or not to send back Server-Timing header
-	// when responding OK to CONNECT request (valid only if OKWaitsForUpstream is true).
+	// when responding OK to CONNECT request.
 	// See https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Server-Timing.
 	// The only metric for now is dialupstream, so the value is in the form "dialupstream;dur=42".
 	OKSendsServerTiming bool
