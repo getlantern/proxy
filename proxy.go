@@ -21,6 +21,11 @@ const (
 	// MetricDialUpstream is the Server-Timing metric to record milliseconds to
 	// dial upstream site when handling a CONNECT request.
 	MetricDialUpstream = "dialupstream"
+
+	// DialTimeoutHeader is a header that sets a timeout for dialing upstream
+	// (only respected on CONNECT requests). The timeout is specified in
+	// milliseconds.
+	DialTimeoutHeader = "X-Proxy-Dial-Timeout"
 )
 
 var (
