@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/getlantern/fdcount"
+	"github.com/getlantern/idletiming"
 	"github.com/getlantern/keyman"
 	"github.com/getlantern/mitm"
 	"github.com/getlantern/mockconn"
@@ -726,4 +727,92 @@ func TestAddDialDeadlineIfNecessary(t *testing.T) {
 	deadline, _ = newCtx.Deadline()
 	cancel()
 	assert.True(t, deadline.Before(defaultDeadline), "Context from request with near dial timeout header should get this near deadline")
+}
+
+func TestPipeliningWithIdleTimingServer(t *testing.T) {
+	idleTimeout := 300 * time.Millisecond
+	numRequests := 2
+
+	l, err := net.Listen("tcp", ":0")
+	if !assert.NoError(t, err) {
+		return
+	}
+	defer l.Close()
+
+	go func() {
+		for {
+			conn, acceptErr := l.Accept()
+			if acceptErr != nil {
+				return
+			}
+			t.Log("Server Accepted")
+			go func() {
+				go io.Copy(ioutil.Discard, conn)
+				resp := &http.Response{
+					ProtoMajor: 1,
+					ProtoMinor: 1,
+					StatusCode: http.StatusOK,
+					Header:     make(http.Header),
+					Close:      false,
+				}
+				resp.Write(conn)
+				conn.Close()
+			}()
+		}
+	}()
+
+	dialer := &net.Dialer{}
+	p := newProxy(&Opts{
+		Dial: func(ctx context.Context, isCONNECT bool, network, addr string) (net.Conn, error) {
+			conn, err := dialer.DialContext(ctx, network, addr)
+			if err != nil {
+				return conn, err
+			}
+			return idletiming.Conn(conn, idleTimeout, func() {
+				t.Log("Connection idled")
+			}), nil
+		},
+	})
+
+	pl, err := net.Listen("tcp", ":0")
+	if !assert.NoError(t, err) {
+		return
+	}
+	defer pl.Close()
+
+	go func() {
+		for {
+			conn, acceptErr := pl.Accept()
+			if acceptErr != nil {
+				return
+			}
+			t.Log("Proxy Accepted")
+			go p.Handle(context.Background(), conn, conn)
+		}
+	}()
+
+	req, _ := http.NewRequest(http.MethodGet, fmt.Sprintf("http://%v/", l.Addr().String()), nil)
+	conn, err := net.Dial("tcp", pl.Addr().String())
+	if !assert.NoError(t, err) {
+		return
+	}
+
+	for i := 0; i < numRequests; i++ {
+		err = req.Write(conn)
+		if !assert.NoError(t, err) {
+			return
+		}
+		time.Sleep(idleTimeout * 3)
+		t.Log("Slept")
+	}
+
+	br := bufio.NewReader(conn)
+	for i := 0; i < numRequests; i++ {
+		resp, err := http.ReadResponse(br, req)
+		if !assert.NoError(t, err) {
+			return
+		}
+		resp.Body.Close()
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+	}
 }
