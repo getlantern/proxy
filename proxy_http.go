@@ -116,19 +116,22 @@ func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstre
 	if req.Method == http.MethodConnect {
 		next = proxy.nextCONNECT(downstream)
 	} else {
-		var tr *http.Transport
+		var tr idleClosingTransport
 		if upstream != nil {
 			setUpstreamForAwareConn(fctx, upstream)
-			tr = &http.Transport{
-				DialContext: func(ctx context.Context, net, addr string) (net.Conn, error) {
-					// always use the supplied upstream connection, but don't allow it to
-					// be closed by the transport
-					return &noCloseConn{upstream}, nil
+			tr = &addressLoggingTransport{
+				Transport: &http.Transport{
+					DialContext: func(ctx context.Context, net, addr string) (net.Conn, error) {
+						// always use the supplied upstream connection, but don't allow it to
+						// be closed by the transport
+						return &noCloseConn{upstream}, nil
+					},
+					// this transport is only used once, don't keep any idle connections,
+					// however still allow the transport to close the connection after using
+					// it
+					MaxIdleConnsPerHost: -1,
 				},
-				// this transport is only used once, don't keep any idle connections,
-				// however still allow the transport to close the connection after using
-				// it
-				MaxIdleConnsPerHost: -1,
+				upstream: upstream,
 			}
 		} else {
 			tr = &http.Transport{
@@ -437,4 +440,22 @@ func defaultFilter(ctx filters.Context, req *http.Request, next filters.Next) (*
 
 func defaultOnError(ctx filters.Context, req *http.Request, read bool, err error) *http.Response {
 	return nil
+}
+
+type idleClosingTransport interface {
+	RoundTrip(req *http.Request) (*http.Response, error)
+	CloseIdleConnections()
+}
+
+type addressLoggingTransport struct {
+	*http.Transport
+	upstream net.Conn
+}
+
+func (alt *addressLoggingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := alt.Transport.RoundTrip(req)
+	if err != nil {
+		err = errors.New("Error round-tripping to %v: %v", alt.upstream.RemoteAddr(), err)
+	}
+	return resp, err
 }
