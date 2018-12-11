@@ -225,7 +225,7 @@ func (proxy *proxy) proceedWithConnect(ctx filters.Context, req *http.Request, u
 	if isUnexpected(readErr) {
 		return log.Errorf("Error piping data to downstream: %v", readErr)
 	} else if isUnexpected(writeErr) {
-		return log.Errorf("Error piping data to upstream: %v", writeErr)
+		return log.Errorf("Error piping data to upstream at %v: %v", upstream.RemoteAddr(), writeErr)
 	}
 	return nil
 }
