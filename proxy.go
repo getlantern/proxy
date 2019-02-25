@@ -25,7 +25,7 @@ const (
 	// DialTimeoutHeader is a header that sets a timeout for dialing upstream
 	// (only respected on CONNECT requests). The timeout is specified in
 	// milliseconds.
-	DialTimeoutHeader = "X-Proxy-Dial-Timeout"
+	DialTimeoutHeader = "X-Lantern-Dial-Timeout"
 )
 
 var (
