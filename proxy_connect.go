@@ -7,10 +7,10 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
-	"github.com/getlantern/errors"
 	"github.com/getlantern/lampshade"
 	"github.com/getlantern/netx"
 	"github.com/getlantern/proxy/filters"
@@ -74,18 +74,32 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 			// than the proxy and continue to consider the proxy good. See the extensive
 			// discussion here: https://github.com/getlantern/lantern/issues/5514.
 			resp, nextCtx = respondOK(resp, modifiedReq, nextCtx)
+			if proxy.OKSendsServerTiming {
+				addDialUpstreamHeader(resp, 0)
+			}
 			return resp, nextCtx, nil
 		}
+
 
 		_, span := trace.StartSpan(ctx, fmt.Sprintf("connect dial:%v", modifiedReq.Host))
 		defer span.End()
 
+		var start time.Time
+		if proxy.OKSendsServerTiming {
+			start = time.Now()
+		}
+
 		// Note - for CONNECT requests, we use the Host from the request URL, not the
 		// Host header. See discussion here:
 		// https://ask.wireshark.org/questions/22988/http-host-header-with-and-without-port-number
-		upstream, err := proxy.Dial(ctx, true, "tcp", upstreamAddr)
+		dialCtx, cancelDial := addDialDeadlineIfNecessary(ctx, modifiedReq)
+		upstream, err := proxy.Dial(dialCtx, true, "tcp", upstreamAddr)
+		cancelDial()
 		if err != nil {
-			return badGateway(ctx, modifiedReq, err)
+			if proxy.OKWaitsForUpstream {
+				return badGateway(ctx, modifiedReq, err)
+			}
+			return nil, ctx, err
 		}
 
 		// In this case, waited to successfully dial upstream before responding
@@ -95,9 +109,41 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 		// for example, if some proxy servers reside in jurisdictions where an
 		// origin site is blocked but other proxy servers don't.
 		resp, nextCtx = respondOK(resp, modifiedReq, nextCtx)
+		if proxy.OKSendsServerTiming {
+			addDialUpstreamHeader(resp, time.Since(start))
+		}
+
 		nextCtx = nextCtx.WithValue(ctxKeyUpstream, upstream)
 		return resp, nextCtx, nil
 	}
+}
+
+func addDialUpstreamHeader(resp *http.Response, duration time.Duration) {
+	resp.Header.Add(serverTimingHeader, fmt.Sprintf("dialupstream;dur=%d", duration/time.Millisecond))
+}
+
+func addDialDeadlineIfNecessary(ctx context.Context, req *http.Request) (context.Context, context.CancelFunc) {
+	timeoutString := req.Header.Get(DialTimeoutHeader)
+	if timeoutString == "" {
+		return ctx, noopCancel
+	}
+
+	timeoutInt, err := strconv.ParseInt(timeoutString, 10, 64)
+	if err != nil {
+		log.Errorf("Invalid %v, expected integer, got '%v'", DialTimeoutHeader, timeoutString)
+		return ctx, noopCancel
+	}
+
+	newDeadline := time.Now().Add(time.Duration(timeoutInt) * time.Millisecond)
+	existingDeadline, contextHasDeadline := ctx.Deadline()
+	if contextHasDeadline && existingDeadline.Before(newDeadline) {
+		return ctx, noopCancel
+	}
+
+	return context.WithDeadline(ctx, newDeadline)
+}
+
+func noopCancel() {
 }
 
 func respondOK(resp *http.Response, req *http.Request, ctx filters.Context) (*http.Response, filters.Context) {
@@ -136,8 +182,7 @@ func (proxy *proxy) proceedWithConnect(ctx filters.Context, req *http.Request, u
 		// Try to MITM the connection
 		downstreamMITM, upstreamMITM, mitming, err := proxy.mitmIC.MITM(downstream, upstream)
 		if err != nil {
-			log.Errorf("Unable to MITM %v: %v", upstreamAddr, err)
-			return errors.New("Unable to MITM connection: %v", err)
+			return log.Errorf("Unable to MITM connection: %v", err)
 		}
 		downstream = downstreamMITM
 		upstream = upstreamMITM
@@ -151,7 +196,7 @@ func (proxy *proxy) proceedWithConnect(ctx filters.Context, req *http.Request, u
 			rr, rrErr = downstreamRR.Rereader()
 			if rrErr != nil {
 				// Reading request overflowed, abort
-				return errors.New("Unable to re-read data: %v", rrErr)
+				return log.Errorf("Unable to re-read data: %v", rrErr)
 			}
 			if peekReqErr == nil {
 				// Handle as HTTP, prepend already read HTTP request
@@ -178,16 +223,16 @@ func (proxy *proxy) proceedWithConnect(ctx filters.Context, req *http.Request, u
 		// before we start piping as usual
 		_, copyErr := io.CopyBuffer(upstream, rr, bufOut)
 		if copyErr != nil {
-			return errors.New("Error copying initial data to upstream: %v", copyErr)
+			return log.Errorf("Error copying initial data to upstream: %v", copyErr)
 		}
 	}
 
 	// Pipe data between the client and the proxy.
 	writeErr, readErr := netx.BidiCopy(upstream, downstream, bufOut, bufIn)
 	if isUnexpected(readErr) {
-		return errors.New("Error piping data to downstream: %v", readErr)
+		return log.Errorf("Error piping data to downstream: %v", readErr)
 	} else if isUnexpected(writeErr) {
-		return errors.New("Error piping data to upstream: %v", writeErr)
+		return log.Errorf("Error piping data to upstream at %v: %v", upstream.RemoteAddr(), writeErr)
 	}
 	return nil
 }

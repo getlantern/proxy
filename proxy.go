@@ -15,6 +15,19 @@ import (
 	"github.com/getlantern/proxy/filters"
 )
 
+const (
+	serverTimingHeader = "Server-Timing"
+
+	// MetricDialUpstream is the Server-Timing metric to record milliseconds to
+	// dial upstream site when handling a CONNECT request.
+	MetricDialUpstream = "dialupstream"
+
+	// DialTimeoutHeader is a header that sets a timeout for dialing upstream
+	// (only respected on CONNECT requests). The timeout is specified in
+	// milliseconds.
+	DialTimeoutHeader = "X-Lantern-Dial-Timeout"
+)
+
 var (
 	log = golog.LoggerFor("proxy")
 )
@@ -72,6 +85,11 @@ type Opts struct {
 	// OKWaitsForUpstream specifies whether or not to wait on dialing upstream
 	// before responding OK to a CONNECT request (CONNECT only).
 	OKWaitsForUpstream bool
+	// OKSendsServerTiming specifies whether or not to send back Server-Timing header
+	// when responding OK to CONNECT request.
+	// See https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Server-Timing.
+	// The only metric for now is dialupstream, so the value is in the form "dialupstream;dur=42".
+	OKSendsServerTiming bool
 
 	// Dial is the function that's used to dial upstream.
 	Dial DialFunc

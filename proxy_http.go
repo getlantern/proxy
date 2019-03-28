@@ -27,11 +27,6 @@ func (opts *Opts) applyHTTPDefaults() {
 	if opts.OnError == nil {
 		opts.OnError = defaultOnError
 	}
-	if opts.IdleTimeout > 0 {
-		opts.Filter = filters.Join(filters.FilterFunc(func(ctx filters.Context, req *http.Request, next filters.Next) (*http.Response, filters.Context, error) {
-			return next(ctx, req)
-		}), opts.Filter)
-	}
 }
 
 // Handle implements the interface Proxy
@@ -59,6 +54,29 @@ func safeClose(conn net.Conn) {
 	conn.Close()
 }
 
+func (proxy *proxy) logInitialReadError(downstream net.Conn, err error) error {
+	rem := downstream.RemoteAddr()
+	r := ""
+	if rem != nil {
+		r = rem.String()
+	}
+	txt := err.Error()
+	// Ignore our generated error that should have already been reported.
+	if strings.HasPrefix(txt, "Client Hello has no cipher suites") {
+		log.Debugf("No cipher suites in common -- old Lantern client")
+		return err
+	}
+	// These errors should all typically be internal go errors, typically with TLS. Break them up
+	// for stackdriver grouping.
+	if strings.Contains(txt, "oversized") {
+		return log.Errorf("Oversized record on initial read: %v from %v", err, r)
+	}
+	if strings.Contains(txt, "first record does not") {
+		return log.Errorf("Not a TLS client connection: %v from %v", err, r)
+	}
+	return log.Errorf("Initial ReadRequest: %v from %v", err, r)
+}
+
 func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstream net.Conn, upstream net.Conn) error {
 	defer func() {
 		if closeErr := downstream.Close(); closeErr != nil {
@@ -74,7 +92,7 @@ func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstre
 	if req != nil {
 		remoteAddr := downstream.RemoteAddr()
 		if remoteAddr != nil {
-			req.RemoteAddr = downstream.RemoteAddr().String()
+			req.RemoteAddr = remoteAddr.String()
 		}
 		if origURLScheme(ctx) == "" {
 			fctx = fctx.
@@ -83,13 +101,15 @@ func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstre
 				WithValue(ctxKeyOrigHost, req.Host)
 		}
 	}
+
 	if err != nil {
 		if isUnexpected(err) {
 			errResp := proxy.OnError(fctx, req, true, err)
 			if errResp != nil {
 				proxy.writeResponse(downstream, req, errResp)
 			}
-			return errors.New("Error in initial ReadRequest: %v", err)
+
+			return proxy.logInitialReadError(downstream, err)
 		}
 		return nil
 	}
@@ -98,19 +118,22 @@ func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstre
 	if req.Method == http.MethodConnect {
 		next = proxy.nextCONNECT(downstream)
 	} else {
-		var tr *http.Transport
+		var tr idleClosingTransport
 		if upstream != nil {
 			setUpstreamForAwareConn(fctx, upstream)
-			tr = &http.Transport{
-				DialContext: func(ctx context.Context, net, addr string) (net.Conn, error) {
-					// always use the supplied upstream connection, but don't allow it to
-					// be closed by the transport
-					return &noCloseConn{upstream}, nil
+			tr = &addressLoggingTransport{
+				Transport: &http.Transport{
+					DialContext: func(ctx context.Context, net, addr string) (net.Conn, error) {
+						// always use the supplied upstream connection, but don't allow it to
+						// be closed by the transport
+						return &noCloseConn{upstream}, nil
+					},
+					// this transport is only used once, don't keep any idle connections,
+					// however still allow the transport to close the connection after using
+					// it
+					MaxIdleConnsPerHost: -1,
 				},
-				// this transport is only used once, don't keep any idle connections,
-				// however still allow the transport to close the connection after using
-				// it
-				MaxIdleConnsPerHost: -1,
+				upstream: upstream,
 			}
 		} else {
 			tr = &http.Transport{
@@ -139,6 +162,9 @@ func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstre
 			handleRequestAware(ctx)
 			resp, err := tr.RoundTrip(prepareRequest(modifiedReq))
 			handleResponseAware(ctx, modifiedReq, resp, err)
+			if err != nil {
+				err = errors.New("Unable to round-trip http request to upstream: %v", err)
+			}
 			return resp, ctx, err
 		}
 	}
@@ -164,17 +190,27 @@ func (proxy *proxy) processRequests(ctx filters.Context, remoteAddr string, req 
 		resp, ctx, err = proxy.Filter.Apply(ctx, req, next)
 		if err != nil && resp == nil {
 			resp = proxy.OnError(ctx, req, false, err)
+			if resp != nil {
+				log.Debugf("Closing client connection on error: %v", err)
+				// On error, we will always close the connection
+				resp.Close = true
+			}
 		}
 
 		if resp != nil {
 			writeErr := proxy.writeResponse(downstream, req, resp)
 			if writeErr != nil {
 				if isUnexpected(writeErr) {
-					return errors.New("Unable to write response to downstream: %v", writeErr)
+					return log.Errorf("Unable to write response to downstream: %v", writeErr)
 				}
 				// Error is not unexpected, but we're done
 				return err
 			}
+		}
+
+		if err != nil {
+			// We encountered an error on round-tripping, stop now
+			return err
 		}
 
 		upstream := upstreamConn(ctx)
@@ -210,7 +246,7 @@ func (proxy *proxy) processRequests(ctx filters.Context, remoteAddr string, req 
 				if errResp != nil {
 					proxy.writeResponse(downstream, req, errResp)
 				}
-				return errors.New("Unable to read next request from downstream: %v", readErr)
+				return log.Errorf("Unable to read next request from downstream: %v", readErr)
 			}
 			return err
 		}
@@ -408,4 +444,22 @@ func defaultFilter(ctx filters.Context, req *http.Request, next filters.Next) (*
 
 func defaultOnError(ctx filters.Context, req *http.Request, read bool, err error) *http.Response {
 	return nil
+}
+
+type idleClosingTransport interface {
+	RoundTrip(req *http.Request) (*http.Response, error)
+	CloseIdleConnections()
+}
+
+type addressLoggingTransport struct {
+	*http.Transport
+	upstream net.Conn
+}
+
+func (alt *addressLoggingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := alt.Transport.RoundTrip(req)
+	if err != nil {
+		err = errors.New("Error round-tripping to %v: %v", alt.upstream.RemoteAddr(), err)
+	}
+	return resp, err
 }
