@@ -28,10 +28,6 @@ const (
 	DialTimeoutHeader = "X-Lantern-Dial-Timeout"
 )
 
-var (
-	log = golog.LoggerFor("proxy")
-)
-
 // DialFunc is the dial function to use for dialing the proxy.
 type DialFunc func(ctx context.Context, isCONNECT bool, network, addr string) (conn net.Conn, err error)
 
@@ -109,6 +105,7 @@ type proxy struct {
 	*Opts
 	mitmIC      *mitm.Interceptor
 	mitmDomains []*regexp.Regexp
+	log         golog.Logger
 }
 
 // New creates a new Proxy configured with the specified Opts. If there's an
@@ -128,6 +125,7 @@ func New(opts *Opts) (newProxy Proxy, mitmErr error) {
 	p := &proxy{
 		Opts:        opts,
 		mitmDomains: make([]*regexp.Regexp, 0),
+		log:         golog.LoggerFor("proxy"),
 	}
 	p.applyHTTPDefaults()
 	p.applyCONNECTDefaults()
@@ -140,7 +138,7 @@ func New(opts *Opts) (newProxy Proxy, mitmErr error) {
 			for _, domain := range opts.MITMOpts.Domains {
 				re, err := domainToRegex(domain)
 				if err != nil {
-					log.Errorf("Unable to convert domain %v to regex: %v", domain, err)
+					p.log.Errorf("Unable to convert domain %v to regex: %v", domain, err)
 				} else {
 					p.mitmDomains = append(p.mitmDomains, re)
 				}

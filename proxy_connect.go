@@ -74,7 +74,7 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 			// discussion here: https://github.com/getlantern/lantern/issues/5514.
 			resp, nextCtx = respondOK(resp, modifiedReq, nextCtx)
 			if proxy.OKSendsServerTiming {
-				addDialUpstreamHeader(resp, 0)
+				proxy.addDialUpstreamHeader(resp, 0)
 			}
 			return resp, nextCtx, nil
 		}
@@ -87,12 +87,12 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 		// Note - for CONNECT requests, we use the Host from the request URL, not the
 		// Host header. See discussion here:
 		// https://ask.wireshark.org/questions/22988/http-host-header-with-and-without-port-number
-		dialCtx, cancelDial := addDialDeadlineIfNecessary(ctx, modifiedReq)
+		dialCtx, cancelDial := proxy.addDialDeadlineIfNecessary(ctx, modifiedReq)
 		upstream, err := proxy.Dial(dialCtx, true, "tcp", upstreamAddr)
 		cancelDial()
 		if err != nil {
 			if proxy.OKWaitsForUpstream {
-				return badGateway(ctx, modifiedReq, err)
+				return proxy.badGateway(ctx, modifiedReq, err)
 			}
 			return nil, ctx, err
 		}
@@ -105,7 +105,7 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 		// origin site is blocked but other proxy servers don't.
 		resp, nextCtx = respondOK(resp, modifiedReq, nextCtx)
 		if proxy.OKSendsServerTiming {
-			addDialUpstreamHeader(resp, time.Since(start))
+			proxy.addDialUpstreamHeader(resp, time.Since(start))
 		}
 
 		nextCtx = nextCtx.WithValue(ctxKeyUpstream, upstream)
@@ -113,11 +113,11 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 	}
 }
 
-func addDialUpstreamHeader(resp *http.Response, duration time.Duration) {
+func (proxy *proxy) addDialUpstreamHeader(resp *http.Response, duration time.Duration) {
 	resp.Header.Add(serverTimingHeader, fmt.Sprintf("dialupstream;dur=%d", duration/time.Millisecond))
 }
 
-func addDialDeadlineIfNecessary(ctx context.Context, req *http.Request) (context.Context, context.CancelFunc) {
+func (proxy *proxy) addDialDeadlineIfNecessary(ctx context.Context, req *http.Request) (context.Context, context.CancelFunc) {
 	timeoutString := req.Header.Get(DialTimeoutHeader)
 	if timeoutString == "" {
 		return ctx, noopCancel
@@ -125,7 +125,7 @@ func addDialDeadlineIfNecessary(ctx context.Context, req *http.Request) (context
 
 	timeoutInt, err := strconv.ParseInt(timeoutString, 10, 64)
 	if err != nil {
-		log.Errorf("Invalid %v, expected integer, got '%v'", DialTimeoutHeader, timeoutString)
+		proxy.log.Errorf("Invalid %v, expected integer, got '%v'", DialTimeoutHeader, timeoutString)
 		return ctx, noopCancel
 	}
 
@@ -166,7 +166,7 @@ func (proxy *proxy) proceedWithConnect(ctx filters.Context, req *http.Request, u
 	}
 	defer func() {
 		if closeErr := upstream.Close(); closeErr != nil {
-			log.Tracef("Error closing upstream connection: %s", closeErr)
+			proxy.log.Tracef("Error closing upstream connection: %s", closeErr)
 		}
 	}()
 
@@ -175,7 +175,7 @@ func (proxy *proxy) proceedWithConnect(ctx filters.Context, req *http.Request, u
 		// Try to MITM the connection
 		downstreamMITM, upstreamMITM, mitming, err := proxy.mitmIC.MITM(downstream, upstream)
 		if err != nil {
-			return log.Errorf("Unable to MITM connection: %v", err)
+			return proxy.log.Errorf("Unable to MITM connection: %v", err)
 		}
 		downstream = downstreamMITM
 		upstream = upstreamMITM
@@ -189,7 +189,7 @@ func (proxy *proxy) proceedWithConnect(ctx filters.Context, req *http.Request, u
 			rr, rrErr = downstreamRR.Rereader()
 			if rrErr != nil {
 				// Reading request overflowed, abort
-				return log.Errorf("Unable to re-read data: %v", rrErr)
+				return proxy.log.Errorf("Unable to re-read data: %v", rrErr)
 			}
 			if peekReqErr == nil {
 				// Handle as HTTP, prepend already read HTTP request
@@ -216,22 +216,22 @@ func (proxy *proxy) proceedWithConnect(ctx filters.Context, req *http.Request, u
 		// before we start piping as usual
 		_, copyErr := io.CopyBuffer(upstream, rr, bufOut)
 		if copyErr != nil {
-			return log.Errorf("Error copying initial data to upstream: %v", copyErr)
+			return proxy.log.Errorf("Error copying initial data to upstream: %v", copyErr)
 		}
 	}
 
 	// Pipe data between the client and the proxy.
 	writeErr, readErr := netx.BidiCopy(upstream, downstream, bufOut, bufIn)
 	if isUnexpected(readErr) {
-		return log.Errorf("Error piping data to downstream: %v", readErr)
+		return proxy.log.Errorf("Error piping data to downstream: %v", readErr)
 	} else if isUnexpected(writeErr) {
-		return log.Errorf("Error piping data to upstream at %v: %v", upstream.RemoteAddr(), writeErr)
+		return proxy.log.Errorf("Error piping data to upstream at %v: %v", upstream.RemoteAddr(), writeErr)
 	}
 	return nil
 }
 
-func badGateway(ctx filters.Context, req *http.Request, err error) (*http.Response, filters.Context, error) {
-	log.Debugf("Responding BadGateway: %v", err)
+func (proxy *proxy) badGateway(ctx filters.Context, req *http.Request, err error) (*http.Response, filters.Context, error) {
+	proxy.log.Debugf("Responding BadGateway: %v", err)
 	return filters.Fail(ctx, req, http.StatusBadGateway, err)
 }
 

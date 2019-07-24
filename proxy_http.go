@@ -15,6 +15,9 @@ import (
 	"github.com/getlantern/netx"
 	"github.com/getlantern/preconn"
 	"github.com/getlantern/proxy/filters"
+	"github.com/opentracing/opentracing-go"
+	"github.com/opentracing/opentracing-go/ext"
+	"github.com/siddontang/go/log"
 )
 
 func (opts *Opts) applyHTTPDefaults() {
@@ -32,7 +35,7 @@ func (proxy *proxy) Handle(ctx context.Context, downstreamIn io.Reader, downstre
 	defer func() {
 		p := recover()
 		if p != nil {
-			safeClose(downstream)
+			proxy.safeClose(downstream)
 			err = errors.New("Recovered from panic handling connection: %v", p)
 		}
 	}()
@@ -41,11 +44,11 @@ func (proxy *proxy) Handle(ctx context.Context, downstreamIn io.Reader, downstre
 	return
 }
 
-func safeClose(conn net.Conn) {
+func (proxy *proxy) safeClose(conn net.Conn) {
 	defer func() {
 		p := recover()
 		if p != nil {
-			log.Errorf("Panic on closing connection: %v", p)
+			proxy.log.Errorf("Panic on closing connection: %v", p)
 		}
 	}()
 
@@ -61,18 +64,18 @@ func (proxy *proxy) logInitialReadError(downstream net.Conn, err error) error {
 	txt := err.Error()
 	// Ignore our generated error that should have already been reported.
 	if strings.HasPrefix(txt, "Client Hello has no cipher suites") {
-		log.Debugf("No cipher suites in common -- old Lantern client")
+		proxy.log.Debugf("No cipher suites in common -- old Lantern client")
 		return err
 	}
 	// These errors should all typically be internal go errors, typically with TLS. Break them up
 	// for stackdriver grouping.
 	if strings.Contains(txt, "oversized") {
-		return log.Errorf("Oversized record on initial read: %v from %v", err, r)
+		return proxy.log.Errorf("Oversized record on initial read: %v from %v", err, r)
 	}
 	if strings.Contains(txt, "first record does not") {
-		return log.Errorf("Not a TLS client connection: %v from %v", err, r)
+		return proxy.log.Errorf("Not a TLS client connection: %v from %v", err, r)
 	}
-	return log.Errorf("Initial ReadRequest: %v from %v", err, r)
+	return proxy.log.Errorf("Initial ReadRequest: %v from %v", err, r)
 }
 
 func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstream net.Conn, upstream net.Conn) error {
@@ -98,6 +101,9 @@ func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstre
 				WithValue(ctxKeyOrigURLHost, req.URL.Host).
 				WithValue(ctxKeyOrigHost, req.Host)
 		}
+
+		finishSpan := proxy.extractSpan(fctx, req)
+		defer finishSpan()
 	}
 
 	if err != nil {
@@ -168,6 +174,31 @@ func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstre
 	return proxy.processRequests(fctx, req.RemoteAddr, req, downstream, downstreamBuffered, next)
 }
 
+func (proxy *proxy) extractSpan(ctx context.Context, req *http.Request) func() {
+	// If we're running on the server side, the request will have the span data while if we're
+	// running on the client side the context will have the span data.
+	if parentSpan := opentracing.SpanFromContext(ctx); parentSpan == nil {
+		span := opentracing.GlobalTracer().StartSpan("proxyHandle", opentracing.ChildOf(parentSpan.Context()))
+
+		opentracing.GlobalTracer().Inject(span.Context(), opentracing.HTTPHeaders, opentracing.HTTPHeadersCarrier(req.Header))
+		return span.Finish
+	}
+
+	// We're on the server, and this is an incomming HTTP request that should contain span context data
+	// it its headers.
+	wireContext, err := opentracing.GlobalTracer().Extract(
+		opentracing.HTTPHeaders,
+		opentracing.HTTPHeadersCarrier(req.Header))
+	if err != nil {
+		// This likely indicates a client that does not support tracing, which in practice will be most
+		// clients certainly initially.
+		return func() {}
+	}
+	proxy.log.Debug("Extracted span from incoming HTTP request!!")
+	span := opentracing.StartSpan("proxyHandle", ext.RPCServerOption(wireContext))
+	return span.Finish
+}
+
 func (proxy *proxy) processRequests(ctx filters.Context, remoteAddr string, req *http.Request, downstream net.Conn, downstreamBuffered *bufio.Reader, next filters.Next) error {
 	var readErr error
 	var resp *http.Response
@@ -187,7 +218,7 @@ func (proxy *proxy) processRequests(ctx filters.Context, remoteAddr string, req 
 		if err != nil && resp == nil {
 			resp = proxy.OnError(ctx, req, false, err)
 			if resp != nil {
-				log.Debugf("Closing client connection on error: %v", err)
+				proxy.log.Debugf("Closing client connection on error: %v", err)
 				// On error, we will always close the connection
 				resp.Close = true
 			}
@@ -197,7 +228,7 @@ func (proxy *proxy) processRequests(ctx filters.Context, remoteAddr string, req 
 			writeErr := proxy.writeResponse(downstream, req, resp)
 			if writeErr != nil {
 				if isUnexpected(writeErr) {
-					return log.Errorf("Unable to write response to downstream: %v", writeErr)
+					return proxy.log.Errorf("Unable to write response to downstream: %v", writeErr)
 				}
 				// Error is not unexpected, but we're done
 				return err
@@ -242,7 +273,7 @@ func (proxy *proxy) processRequests(ctx filters.Context, remoteAddr string, req 
 				if errResp != nil {
 					proxy.writeResponse(downstream, req, errResp)
 				}
-				return log.Errorf("Unable to read next request from downstream: %v", readErr)
+				return proxy.log.Errorf("Unable to read next request from downstream: %v", readErr)
 			}
 			return err
 		}
