@@ -177,7 +177,7 @@ func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstre
 func (proxy *proxy) extractSpan(ctx context.Context, req *http.Request) func() {
 	// If we're running on the server side, the request will have the span data while if we're
 	// running on the client side the context will have the span data.
-	if parentSpan := opentracing.SpanFromContext(ctx); parentSpan == nil {
+	if parentSpan := opentracing.SpanFromContext(ctx); parentSpan != nil {
 		span := opentracing.GlobalTracer().StartSpan("proxyHandle", opentracing.ChildOf(parentSpan.Context()))
 
 		opentracing.GlobalTracer().Inject(span.Context(), opentracing.HTTPHeaders, opentracing.HTTPHeadersCarrier(req.Header))
