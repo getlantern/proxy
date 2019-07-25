@@ -17,7 +17,6 @@ import (
 	"github.com/getlantern/proxy/filters"
 	"github.com/opentracing/opentracing-go"
 	"github.com/opentracing/opentracing-go/ext"
-	"github.com/siddontang/go/log"
 )
 
 func (opts *Opts) applyHTTPDefaults() {
@@ -81,7 +80,7 @@ func (proxy *proxy) logInitialReadError(downstream net.Conn, err error) error {
 func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstream net.Conn, upstream net.Conn) error {
 	defer func() {
 		if closeErr := downstream.Close(); closeErr != nil {
-			log.Tracef("Error closing downstream connection: %s", closeErr)
+			proxy.log.Tracef("Error closing downstream connection: %s", closeErr)
 		}
 	}()
 
