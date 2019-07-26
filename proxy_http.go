@@ -89,6 +89,7 @@ func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstre
 
 	// Read initial request
 	req, err := http.ReadRequest(downstreamBuffered)
+	proxy.log.Debug("In new proxy code")
 	if req != nil {
 		remoteAddr := downstream.RemoteAddr()
 		if remoteAddr != nil {
