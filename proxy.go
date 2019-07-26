@@ -145,7 +145,7 @@ func New(opts *Opts) (newProxy Proxy, mitmErr error) {
 			}
 		}
 	}
-
+	p.log.Debug("Returning new proxy")
 	return p, mitmErr
 }
 
