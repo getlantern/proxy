@@ -61,6 +61,7 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 		upstreamAddr := modifiedReq.URL.Host
 		nextCtx := ctx.WithValue(ctxKeyUpstreamAddr, upstreamAddr)
 
+		proxy.log.Debugf("proxy_connect modifiedReq %#v", modifiedReq)
 		if !proxy.OKWaitsForUpstream {
 			// We preemptively respond with an OK on the client. Some user agents like
 			// Chrome consider any non-200 OK response from the proxy to indicate that
@@ -97,7 +98,6 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 			return nil, ctx, err
 		}
 
-		proxy.log.Debugf("proxy_connect modifiedReq %#v", modifiedReq)
 		// In this case, waited to successfully dial upstream before responding
 		// OK. Lantern uses this logic on server-side proxies so that the Lantern
 		// client retains the opportunity to fail over to a different proxy server
