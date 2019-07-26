@@ -178,6 +178,7 @@ func (proxy *proxy) extractSpan(ctx context.Context, req *http.Request) func() {
 	// running on the client side the context will have the span data.
 	if parentSpan := opentracing.SpanFromContext(ctx); parentSpan != nil {
 		span := opentracing.GlobalTracer().StartSpan("proxyHandle", opentracing.ChildOf(parentSpan.Context()))
+		proxy.log.Debug("Extracted span from incoming proxy context")
 
 		opentracing.GlobalTracer().Inject(span.Context(), opentracing.HTTPHeaders, opentracing.HTTPHeadersCarrier(req.Header))
 		return span.Finish
