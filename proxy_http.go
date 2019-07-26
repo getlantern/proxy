@@ -205,7 +205,7 @@ func (proxy *proxy) extractSpan(ctx context.Context, req *http.Request) func() {
 	if err != nil {
 		// This likely indicates a client that does not support tracing, which in practice will be most
 		// clients certainly initially.
-		log.Errorf("Could not find span on server in client request: %v", err)
+		log.Errorf("Could not find span on server in client request: %v, for headers %#v", err, req.Header)
 		return func() {}
 	}
 	proxy.log.Debug("Extracted span from incoming HTTP request!!")
