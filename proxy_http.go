@@ -176,12 +176,6 @@ func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstre
 }
 
 func (proxy *proxy) extractSpan(ctx context.Context, req *http.Request) func() {
-	if strings.HasPrefix(req.RemoteAddr, "65.214.166.18") {
-		proxy.log.Debugf("Attempting to extract span from %#v", req)
-	} else {
-		return func() {}
-	}
-
 	// If we're running on the server side, the HTTP request will have the span data while if we're
 	// running on the client side the context will have the span data.
 	if parentSpan := opentracing.SpanFromContext(ctx); parentSpan != nil {
@@ -196,6 +190,11 @@ func (proxy *proxy) extractSpan(ctx context.Context, req *http.Request) func() {
 		return span.Finish
 	}
 
+	if strings.HasPrefix(req.RemoteAddr, "65.214.166.18") {
+		proxy.log.Debugf("Attempting to extract span from %#v", req)
+	} else {
+		return func() {}
+	}
 	// We're on the server, and this is an incomming HTTP request that should contain span context data
 	// it its headers.
 	wireContext, err := opentracing.GlobalTracer().Extract(
