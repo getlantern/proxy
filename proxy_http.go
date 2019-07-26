@@ -89,7 +89,7 @@ func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstre
 
 	// Read initial request
 	req, err := http.ReadRequest(downstreamBuffered)
-	proxy.log.Debug("In new proxy code")
+	proxy.log.Debugf("In new proxy code for %v", downstream.RemoteAddr().String())
 	if req != nil {
 		remoteAddr := downstream.RemoteAddr()
 		if remoteAddr != nil {
@@ -175,6 +175,7 @@ func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstre
 }
 
 func (proxy *proxy) extractSpan(ctx context.Context, req *http.Request) func() {
+	proxy.log.Debugf("Attempting to extract span")
 	if strings.HasPrefix("65.214.166.18", req.RemoteAddr) {
 		proxy.log.Debugf("Attempting to extract span from %#v with headers: %#v", req, req.Header)
 	}
