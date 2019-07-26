@@ -182,11 +182,13 @@ func (proxy *proxy) extractSpan(ctx context.Context, req *http.Request) func() {
 		span := opentracing.GlobalTracer().StartSpan("proxyHandle", opentracing.ChildOf(parentSpan.Context()))
 		proxy.log.Debug("Extracted span from incoming proxy context")
 
+		proxy.log.Debugf("Before injecting %#v", req.Header)
 		err := opentracing.GlobalTracer().Inject(span.Context(), opentracing.HTTPHeaders, opentracing.HTTPHeadersCarrier(req.Header))
 		if err != nil {
 			log.Errorf("Could not inject span in client request: %v", err)
 			return func() {}
 		}
+		proxy.log.Debugf("After injecting %#v", req.Header)
 		return span.Finish
 	}
 
