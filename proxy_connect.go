@@ -15,6 +15,7 @@ import (
 	"github.com/getlantern/netx"
 	"github.com/getlantern/proxy/filters"
 	"github.com/getlantern/reconn"
+	"github.com/opentracing/opentracing-go"
 )
 
 const (
@@ -170,6 +171,14 @@ func (proxy *proxy) proceedWithConnect(ctx filters.Context, req *http.Request, u
 			proxy.log.Tracef("Error closing upstream connection: %s", closeErr)
 		}
 	}()
+	if parentSpan := opentracing.SpanFromContext(ctx); parentSpan != nil {
+		proxy.log.Debug("Extracted span from incoming proxy context in balancer")
+	} else {
+		proxy.log.Debug("No parent span in context in balancer!!")
+	}
+	span, spannedCtx := opentracing.StartSpanFromContext(ctx, "proxy-data-shuffling")
+	ctx = filters.AdaptContext(spannedCtx)
+	defer span.Finish()
 
 	var rr io.Reader
 	if proxy.ShouldMITM(req, upstreamAddr) {
