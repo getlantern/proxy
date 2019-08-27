@@ -103,8 +103,9 @@ func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstre
 				WithValue(ctxKeyOrigHost, req.Host)
 		}
 
-		finishSpan := proxy.extractSpan(fctx, req)
+		childCtx, finishSpan := proxy.extractSpan(fctx, req)
 		defer finishSpan()
+		fctx = filters.AdaptContext(childCtx)
 	}
 
 	if err != nil {
@@ -175,27 +176,27 @@ func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstre
 	return proxy.processRequests(fctx, req.RemoteAddr, req, downstream, downstreamBuffered, next)
 }
 
-func (proxy *proxy) extractSpan(ctx context.Context, req *http.Request) func() {
-	// If we're running on the server side, the HTTP request will have the span data while if we're
-	// running on the client side the context will have the span data.
+func (proxy *proxy) extractSpan(ctx context.Context, req *http.Request) (context.Context, func()) {
+	// If we're running on the Lantern client side, the context will contain the current span data.
 	if parentSpan := opentracing.SpanFromContext(ctx); parentSpan != nil {
-		span := opentracing.GlobalTracer().StartSpan("proxyHandle", opentracing.ChildOf(parentSpan.Context()))
+		span := opentracing.GlobalTracer().StartSpan("client-proxyHandle", opentracing.ChildOf(parentSpan.Context()))
+		childCtx := opentracing.ContextWithSpan(ctx, span)
 		proxy.log.Debug("Extracted span from incoming proxy context")
 
 		proxy.log.Debugf("Before injecting %#v", req.Header)
 		err := opentracing.GlobalTracer().Inject(span.Context(), opentracing.HTTPHeaders, opentracing.HTTPHeadersCarrier(req.Header))
 		if err != nil {
 			log.Errorf("Could not inject span in client request: %v", err)
-			return func() {}
+			return childCtx, func() {}
 		}
 		proxy.log.Debugf("After injecting %#v", req.Header)
-		return span.Finish
+		return childCtx, span.Finish
 	}
 
 	if strings.HasPrefix(req.RemoteAddr, "65.214.166.18") {
 		proxy.log.Debugf("Attempting to extract span from %#v", req)
 	} else {
-		return func() {}
+		return ctx, func() {}
 	}
 	// We're on the server, and this is an incomming HTTP request that should contain span context data
 	// it its headers.
@@ -206,11 +207,12 @@ func (proxy *proxy) extractSpan(ctx context.Context, req *http.Request) func() {
 		// This likely indicates a client that does not support tracing, which in practice will be most
 		// clients certainly initially.
 		log.Errorf("Could not find span on server in client request to %v: %v, for request %#v", req.URL, err, req)
-		return func() {}
+		return ctx, func() {}
 	}
 	proxy.log.Debug("Extracted span from incoming HTTP request!!")
-	span := opentracing.StartSpan("proxyHandle", ext.RPCServerOption(wireContext))
-	return span.Finish
+	span := opentracing.StartSpan("server-proxyHandle", ext.RPCServerOption(wireContext))
+	childCtx := opentracing.ContextWithSpan(ctx, span)
+	return childCtx, span.Finish
 }
 
 func (proxy *proxy) processRequests(ctx filters.Context, remoteAddr string, req *http.Request, downstream net.Conn, downstreamBuffered *bufio.Reader, next filters.Next) error {
