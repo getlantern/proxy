@@ -9,9 +9,9 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/getlantern/lampshade"
 	"github.com/getlantern/netx"
 	"github.com/getlantern/proxy/filters"
 	"github.com/getlantern/reconn"
@@ -20,7 +20,8 @@ import (
 const (
 	connectRequest = "CONNECT %v HTTP/1.1\r\nHost: %v\r\n\r\n"
 
-	maxHTTPSize = 2 << 15 // 64K
+	maxHTTPSize       = 2 << 15 // 64K
+	defaultBufferSize = 2 << 11 // 4K
 )
 
 // BufferSource is a source for buffers used in reading/writing.
@@ -32,7 +33,11 @@ type BufferSource interface {
 func (proxy *proxy) applyCONNECTDefaults() {
 	// Apply defaults
 	if proxy.BufferSource == nil {
-		proxy.BufferSource = &defaultBufferSource{}
+		proxy.BufferSource = &defaultBufferSource{sync.Pool{
+			New: func() interface{} {
+				return make([]byte, defaultBufferSize)
+			},
+		}}
 	}
 	if proxy.ShouldMITM == nil {
 		proxy.ShouldMITM = proxy.defaultShouldMITM
@@ -235,15 +240,14 @@ func badGateway(ctx filters.Context, req *http.Request, err error) (*http.Respon
 	return filters.Fail(ctx, req, http.StatusBadGateway, err)
 }
 
-type defaultBufferSource struct{}
+type defaultBufferSource struct{ sync.Pool }
 
 func (dbs *defaultBufferSource) Get() []byte {
-	// We limit ourselves to lampshade.MaxDataLen to ensure compatibility with it
-	return make([]byte, lampshade.MaxDataLen)
+	return dbs.Pool.Get().([]byte)
 }
 
 func (dbs *defaultBufferSource) Put(buf []byte) {
-	// do nothing
+	dbs.Pool.Put(buf)
 }
 
 func (proxy *proxy) defaultShouldMITM(req *http.Request, upstreamAddr string) bool {
