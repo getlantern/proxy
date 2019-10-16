@@ -93,10 +93,7 @@ func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstre
 			req.RemoteAddr = remoteAddr.String()
 		}
 		if origURLScheme(ctx) == "" {
-			fctx = fctx.
-				WithValue(ctxKeyOrigURLScheme, req.URL.Scheme).
-				WithValue(ctxKeyOrigURLHost, req.URL.Host).
-				WithValue(ctxKeyOrigHost, req.Host)
+			fctx = fctx.WithValue(CtxKeyInitialRequest, req)
 		}
 	}
 

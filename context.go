@@ -9,13 +9,14 @@ import (
 type contextKey string
 
 const (
-	ctxKeyUpstream      = contextKey("upstream")
-	ctxKeyUpstreamAddr  = contextKey("upstreamAddr")
-	ctxKeyNoRespondOkay = contextKey("noRespondOK")
-	ctxKeyOrigURLScheme = contextKey("origURLScheme")
-	ctxKeyOrigURLHost   = contextKey("origURLHost")
-	ctxKeyOrigHost      = contextKey("origHost")
-	ctxKeyAwareConn     = contextKey("awareConn")
+	// CtxKeyInitialRequest is the key in the context whose value stores the
+	// first *http.Request received from the downstream connection, which may
+	// contain some information the subsequent requests lack.
+	CtxKeyInitialRequest = contextKey("initialRequest")
+	ctxKeyUpstream       = contextKey("upstream")
+	ctxKeyUpstreamAddr   = contextKey("upstreamAddr")
+	ctxKeyNoRespondOkay  = contextKey("noRespondOK")
+	ctxKeyAwareConn      = contextKey("awareConn")
 )
 
 func upstreamConn(ctx context.Context) net.Conn {
@@ -34,28 +35,33 @@ func upstreamAddr(ctx context.Context) string {
 	return upstreamAddr.(string)
 }
 
-func origURLScheme(ctx context.Context) string {
-	origHost := ctx.Value(ctxKeyOrigURLScheme)
-	if origHost == nil {
-		return ""
+func initialRequest(ctx context.Context) *http.Request {
+	req := ctx.Value(CtxKeyInitialRequest)
+	if req == nil {
+		return nil
 	}
-	return origHost.(string)
+	return req.(*http.Request)
+}
+
+func origURLScheme(ctx context.Context) string {
+	if req := initialRequest(ctx); req != nil {
+		return req.URL.Scheme
+	}
+	return ""
 }
 
 func origURLHost(ctx context.Context) string {
-	origHost := ctx.Value(ctxKeyOrigURLHost)
-	if origHost == nil {
-		return ""
+	if req := initialRequest(ctx); req != nil {
+		return req.URL.Host
 	}
-	return origHost.(string)
+	return ""
 }
 
 func origHost(ctx context.Context) string {
-	origHost := ctx.Value(ctxKeyOrigHost)
-	if origHost == nil {
-		return ""
+	if req := initialRequest(ctx); req != nil {
+		return req.Host
 	}
-	return origHost.(string)
+	return ""
 }
 
 func withAwareConn(ctx context.Context) context.Context {
