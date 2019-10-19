@@ -385,7 +385,7 @@ func copyHeadersForForwarding(dst, src http.Header) {
 			// the slice is short typically, don't bother sort it to speed up lookup
 			extraHopByHopHeaders = vv
 		case "Keep-Alive":
-		case "Proxy-Connection": // It's non-standard but every browser adds it when sending request to proxy.
+		// case "Proxy-Connection": // It's non-standard but every browser adds it when sending request to proxy.
 		case "Proxy-Authenticate":
 		case "Proxy-Authorization":
 		case "TE":
