@@ -408,7 +408,6 @@ func copyHeadersForForwarding(dst, src http.Header) {
 
 	pc := src.Get("Proxy-Connection")
 	if pc != "" {
-		log.Debugf("Got Proxy-Connection header from %#v", src)
 		dst.Set("Connection", pc)
 	}
 	dst.Del("Proxy-Connection")
