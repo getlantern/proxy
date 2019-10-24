@@ -26,7 +26,7 @@ import (
 	"github.com/getlantern/mockconn"
 	"github.com/getlantern/proxy/filters"
 	"github.com/getlantern/tlsdefaults"
-	"github.com/mitchellh/go-server-timing"
+	servertiming "github.com/mitchellh/go-server-timing"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -50,6 +50,70 @@ func init() {
 			os.Remove(file.Name())
 		}
 	}
+}
+
+type requestAware struct {
+	net.Conn
+}
+
+func (ra *requestAware) OnRequest(req *http.Request) {
+	log.Debug("Handling request")
+	req.Header.Set("x-aware", "true")
+}
+
+type notAware struct {
+	net.Conn
+}
+
+func (na *notAware) Wrapped() net.Conn {
+	return na.Conn
+}
+
+func TestRequestAware(t *testing.T) {
+	const addr = "127.0.0.1:3000"
+	var conn net.Conn
+	var err error
+	pr, err := New(&Opts{
+		Dial: func(context context.Context, isConnect bool, transport, addr string) (net.Conn, error) {
+			conn, err = net.Dial(transport, addr)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return &notAware{&requestAware{conn}}, err
+		},
+	})
+	p := pr.(*proxy)
+
+	assert.NoError(t, err)
+
+	var serverRequest *http.Request
+
+	var server *http.Server
+	go func() {
+		http.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
+			serverRequest = req
+		})
+		server = &http.Server{Addr: addr}
+		server.ListenAndServe()
+	}()
+
+	var tr idleClosingTransport = &http.Transport{
+		DialContext: p.requestAwareDial,
+	}
+
+	next := p.nextNonCONNECT(tr)
+	req, err := http.NewRequest("GET", "http://127.0.0.1:3000", nil)
+
+	ctx := context.Background()
+	ctx = withAwareConn(ctx)
+	fctx := filters.AdaptContext(ctx)
+
+	_, ctx, err = next(fctx, req)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "true", serverRequest.Header.Get("x-aware"))
+	conn.Close()
+	server.Close()
 }
 
 func TestDialFailureHTTP(t *testing.T) {
