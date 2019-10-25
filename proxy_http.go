@@ -135,15 +135,7 @@ func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstre
 			}
 		} else {
 			tr = &http.Transport{
-				DialContext: func(ctx context.Context, net, addr string) (net.Conn, error) {
-					conn, err := proxy.Dial(ctx, false, net, addr)
-					if err == nil {
-						// On first dialing conn, handle RequestAware
-						setUpstreamForAwareConn(ctx, conn)
-						handleRequestAware(ctx)
-					}
-					return conn, err
-				},
+				DialContext:     proxy.requestAwareDial,
 				IdleConnTimeout: proxy.IdleTimeout,
 				// since we have one transport per downstream connection, we don't need
 				// more than this
@@ -152,20 +144,40 @@ func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstre
 		}
 
 		defer tr.CloseIdleConnections()
-		next = func(ctx filters.Context, modifiedReq *http.Request) (*http.Response, filters.Context, error) {
-			modifiedReq = modifiedReq.WithContext(ctx)
-			setRequestForAwareConn(ctx, modifiedReq)
-			handleRequestAware(ctx)
-			resp, err := tr.RoundTrip(prepareRequest(modifiedReq))
-			handleResponseAware(ctx, modifiedReq, resp, err)
-			if err != nil {
-				err = errors.New("Unable to round-trip http request to upstream: %v", err)
-			}
-			return resp, ctx, err
-		}
+		next = proxy.nextNonCONNECT(tr)
 	}
 
 	return proxy.processRequests(fctx, req.RemoteAddr, req, downstream, downstreamBuffered, next)
+}
+
+func (proxy *proxy) requestAwareDial(ctx context.Context, network, addr string) (net.Conn, error) {
+	conn, err := proxy.Dial(ctx, false, network, addr)
+	if err == nil {
+		// On first dialing conn, handle RequestAware
+		setUpstreamForAwareConn(ctx, conn)
+		handleRequestAware(ctx)
+	}
+	return conn, err
+}
+
+func (proxy *proxy) nextNonCONNECT(tr idleClosingTransport) func(ctx filters.Context, modifiedReq *http.Request) (*http.Response, filters.Context, error) {
+	return func(ctx filters.Context, modifiedReq *http.Request) (*http.Response, filters.Context, error) {
+		modifiedReq = modifiedReq.WithContext(ctx)
+		modifiedReq = prepareRequest(modifiedReq)
+
+		// Note that the following request aware handling only applies when the upstream
+		// connection has already been made -- i.e. when there is a net.Conn that is possibly
+		// request aware. In particular it does not apply on the first request because the
+		// RoundTrip call creates the upstream connection in that case. See DialContext above.
+		setRequestForAwareConn(ctx, modifiedReq)
+		handleRequestAware(ctx)
+		resp, err := tr.RoundTrip(modifiedReq)
+		handleResponseAware(ctx, modifiedReq, resp, err)
+		if err != nil {
+			err = errors.New("Unable to round-trip http request to upstream: %v", err)
+		}
+		return resp, ctx, err
+	}
 }
 
 func (proxy *proxy) processRequests(ctx filters.Context, remoteAddr string, req *http.Request, downstream net.Conn, downstreamBuffered *bufio.Reader, next filters.Next) error {
@@ -399,6 +411,12 @@ func copyHeadersForForwarding(dst, src http.Header) {
 			}
 		}
 	}
+
+	pc := src.Get("Proxy-Connection")
+	if pc != "" {
+		dst.Set("Connection", pc)
+	}
+	dst.Del("Proxy-Connection")
 }
 
 func contains(k string, s []string) bool {
