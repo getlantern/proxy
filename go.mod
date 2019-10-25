@@ -21,8 +21,5 @@ require (
 	github.com/getlantern/reconn v0.0.0-20161128113912-7053d017511c
 	github.com/getlantern/tlsdefaults v0.0.0-20171004213447-cf35cfd0b1b4
 	github.com/mitchellh/go-server-timing v1.0.0
-	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
-	github.com/modern-go/reflect2 v1.0.1 // indirect
 	github.com/stretchr/testify v1.4.0
-	golang.org/x/net v0.0.0-20190912160710-24e19bdeb0f2
 )
