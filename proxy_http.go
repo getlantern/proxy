@@ -448,6 +448,7 @@ func isUnexpected(err error) bool {
 		!strings.Contains(text, "use of closed network connection") &&
 		// usually caused by client disconnecting
 		!strings.Contains(text, "broken pipe") &&
+		!strings.Contains(text, "closed pipe") &&
 		// usually caused by client disconnecting
 		!strings.Contains(text, "connection reset by peer")
 }
