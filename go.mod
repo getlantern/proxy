@@ -18,6 +18,8 @@ require (
 	github.com/getlantern/preconn v0.0.0-20180328114929-0b5766010efe
 	github.com/getlantern/reconn v0.0.0-20161128113912-7053d017511c
 	github.com/getlantern/tlsdefaults v0.0.0-20171004213447-cf35cfd0b1b4
+	github.com/getlantern/tlsutil v0.2.0
 	github.com/mitchellh/go-server-timing v1.0.0
-	github.com/stretchr/testify v1.5.1
+	github.com/stretchr/testify v1.6.1
+	golang.org/x/crypto v0.0.0-20200709230013-948cd5f35899 // indirect
 )

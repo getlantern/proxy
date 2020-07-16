@@ -3,6 +3,7 @@ package proxy
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/getlantern/netx"
 	"github.com/getlantern/proxy/filters"
+	"github.com/getlantern/proxy/helloreader"
 	"github.com/getlantern/reconn"
 )
 
@@ -168,6 +170,15 @@ func (proxy *proxy) proceedWithConnect(ctx filters.Context, req *http.Request, u
 		if dialErr != nil {
 			return dialErr
 		}
+
+		// 3349 POC
+		upstream = helloreader.WrapClient(upstream, func(hello []byte, err error) {
+			if err != nil {
+				fmt.Println("[3349 POC] helloreader error:", err)
+				return
+			}
+			fmt.Println("[3349 POC] read hello:", base64.StdEncoding.EncodeToString(hello))
+		})
 	}
 	defer func() {
 		if closeErr := upstream.Close(); closeErr != nil {
