@@ -40,11 +40,14 @@ func (proxy *proxy) applyCONNECTDefaults() {
 		}}
 	}
 	if proxy.ShouldMITM == nil {
+		log.Trace("No ShouldMITM provided, using default")
 		proxy.ShouldMITM = proxy.defaultShouldMITM
 	} else {
 		orig := proxy.ShouldMITM
 		proxy.ShouldMITM = func(req *http.Request, upstreamAddr string) bool {
+			log.Tracef("Checking whether to MITM %v", req.Host)
 			if !orig(req, upstreamAddr) {
+				log.Trace("Not according to orig!")
 				return false
 			}
 			return proxy.defaultShouldMITM(req, upstreamAddr)
@@ -252,10 +255,12 @@ func (dbs *defaultBufferSource) Put(buf []byte) {
 
 func (proxy *proxy) defaultShouldMITM(req *http.Request, upstreamAddr string) bool {
 	if proxy.mitmIC == nil {
+		log.Trace("No mitmIC, not MITMing")
 		return false
 	}
 	host, _, err := net.SplitHostPort(upstreamAddr)
 	if err != nil {
+		log.Tracef("Bad upstreamAddr, not MITMing: %v", upstreamAddr)
 		return false
 	}
 	for _, mitmDomain := range proxy.mitmDomains {
@@ -263,5 +268,6 @@ func (proxy *proxy) defaultShouldMITM(req *http.Request, upstreamAddr string) bo
 			return true
 		}
 	}
+	log.Tracef("Domain not MITMable: %v", host)
 	return false
 }
