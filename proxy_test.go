@@ -811,7 +811,12 @@ func TestPipeliningWithIdleTimingServer(t *testing.T) {
 			}
 			t.Log("Server Accepted")
 			go func() {
-				go io.Copy(ioutil.Discard, conn)
+				defer conn.Close()
+				br := bufio.NewReader(conn)
+				_, err := http.ReadRequest(br)
+				if err != nil {
+					return
+				}
 				resp := &http.Response{
 					ProtoMajor: 1,
 					ProtoMinor: 1,
@@ -820,7 +825,6 @@ func TestPipeliningWithIdleTimingServer(t *testing.T) {
 					Close:      false,
 				}
 				resp.Write(conn)
-				conn.Close()
 			}()
 		}
 	}()
