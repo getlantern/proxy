@@ -315,7 +315,16 @@ func (proxy *proxy) writeResponse(downstream io.Writer, req *http.Request, resp 
 		resp = prepareResponse(resp, belowHTTP11)
 		proxy.addIdleKeepAlive(resp.Header)
 	}
-	err := resp.Write(out)
+
+	bout := bufio.NewWriter(out)
+	err := resp.Write(bout)
+	// always try to flush what we have
+	err1 := bout.Flush()
+	// take first error
+	if err == nil {
+		err = err1
+	}
+
 	// resp.Write closes the body only if it's successfully sent. Close
 	// manually when error happens.
 	if err != nil && resp.Body != nil {

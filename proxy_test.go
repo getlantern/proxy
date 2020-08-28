@@ -26,6 +26,7 @@ import (
 	"github.com/getlantern/mockconn"
 	"github.com/getlantern/proxy/filters"
 	"github.com/getlantern/tlsdefaults"
+	"github.com/getlantern/waitforserver"
 	servertiming "github.com/mitchellh/go-server-timing"
 	"github.com/stretchr/testify/assert"
 )
@@ -73,6 +74,11 @@ func TestRequestAware(t *testing.T) {
 	const addr = "127.0.0.1:3000"
 	var conn net.Conn
 	var err error
+	defer func() {
+		if conn != nil {
+			conn.Close()
+		}
+	}()
 	pr, err := New(&Opts{
 		Dial: func(context context.Context, isConnect bool, transport, addr string) (net.Conn, error) {
 			conn, err = net.Dial(transport, addr)
@@ -88,14 +94,13 @@ func TestRequestAware(t *testing.T) {
 
 	var serverRequest *http.Request
 
-	var server *http.Server
-	go func() {
-		http.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
-			serverRequest = req
-		})
-		server = &http.Server{Addr: addr}
-		server.ListenAndServe()
-	}()
+	server := &http.Server{Addr: addr, Handler: http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		serverRequest = req
+	})}
+	defer server.Close()
+	go server.ListenAndServe()
+
+	waitforserver.WaitForServer("tcp", addr, 5*time.Second)
 
 	var tr idleClosingTransport = &http.Transport{
 		DialContext: p.requestAwareDial,
@@ -112,8 +117,6 @@ func TestRequestAware(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Equal(t, "true", serverRequest.Header.Get("x-aware"))
-	conn.Close()
-	server.Close()
 }
 
 func TestDialFailureHTTP(t *testing.T) {
@@ -811,7 +814,12 @@ func TestPipeliningWithIdleTimingServer(t *testing.T) {
 			}
 			t.Log("Server Accepted")
 			go func() {
-				go io.Copy(ioutil.Discard, conn)
+				defer conn.Close()
+				br := bufio.NewReader(conn)
+				_, err := http.ReadRequest(br)
+				if err != nil {
+					return
+				}
 				resp := &http.Response{
 					ProtoMajor: 1,
 					ProtoMinor: 1,
@@ -820,7 +828,6 @@ func TestPipeliningWithIdleTimingServer(t *testing.T) {
 					Close:      false,
 				}
 				resp.Write(conn)
-				conn.Close()
 			}()
 		}
 	}()
