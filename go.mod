@@ -5,11 +5,11 @@ go 1.12
 require (
 	github.com/getlantern/byteexec v0.0.0-20170405023437-4cfb26ec74f4 // indirect
 	github.com/getlantern/elevate v0.0.0-20180207094634-c2e2e4901072 // indirect
-	github.com/getlantern/errors v0.0.0-20190325191628-abdb3e3e36f7
+	github.com/getlantern/errors v1.0.1
 	github.com/getlantern/fdcount v0.0.0-20190912142506-f89afd7367c4
 	github.com/getlantern/filepersist v0.0.0-20160317154340-c5f0cd24e799 // indirect
 	github.com/getlantern/go-cache v0.0.0-20141028142048-88b53914f467 // indirect
-	github.com/getlantern/golog v0.0.0-20190830074920-4ef2e798c2d7
+	github.com/getlantern/golog v0.0.0-20200929154820-62107891371a
 	github.com/getlantern/idletiming v0.0.0-20200228204104-10036786eac5
 	github.com/getlantern/keyman v0.0.0-20180207174507-f55e7280e93a
 	github.com/getlantern/mitm v0.0.0-20180205214248-4ce456bae650
