@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"regexp"
+	"sync"
 	"time"
 
 	"github.com/getlantern/errors"
@@ -47,6 +48,9 @@ type Proxy interface {
 
 	// Serve runs a server on the given Listener
 	Serve(l net.Listener) error
+
+	// ApplyMITMOptions updates the configuration of the MITM interceptor
+	ApplyMITMOptions(MITMOpts *mitm.Opts) error
 }
 
 // RequestAware is an interface for connections that are able to modify requests
@@ -109,6 +113,7 @@ type proxy struct {
 	*Opts
 	mitmIC      *mitm.Interceptor
 	mitmDomains []*regexp.Regexp
+	mitmLock    sync.RWMutex
 }
 
 // New creates a new Proxy configured with the specified Opts. If there's an
@@ -132,12 +137,19 @@ func New(opts *Opts) (newProxy Proxy, mitmErr error) {
 	p.applyHTTPDefaults()
 	p.applyCONNECTDefaults()
 
-	if opts.MITMOpts != nil {
-		p.mitmIC, mitmErr = mitm.Configure(opts.MITMOpts)
+	return p, p.ApplyMITMOptions(opts.MITMOpts)
+}
+
+func (p *proxy) ApplyMITMOptions(MITMOpts *mitm.Opts) (mitmErr error) {
+	p.mitmLock.Lock()
+	defer p.mitmLock.Unlock()
+
+	if MITMOpts != nil {
+		p.mitmIC, mitmErr = mitm.Configure(MITMOpts)
 		if mitmErr != nil {
 			mitmErr = errors.New("Unable to configure MITM: %v", mitmErr)
 		} else {
-			for _, domain := range opts.MITMOpts.Domains {
+			for _, domain := range MITMOpts.Domains {
 				re, err := domainToRegex(domain)
 				if err != nil {
 					log.Errorf("Unable to convert domain %v to regex: %v", domain, err)
@@ -147,8 +159,7 @@ func New(opts *Opts) (newProxy Proxy, mitmErr error) {
 			}
 		}
 	}
-
-	return p, mitmErr
+	return
 }
 
 // OnFirstOnly returns a filter that applies the given filter only on the first

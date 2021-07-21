@@ -177,6 +177,8 @@ func (proxy *proxy) proceedWithConnect(ctx filters.Context, req *http.Request, u
 
 	var rr io.Reader
 	if proxy.ShouldMITM(req, upstreamAddr) {
+		proxy.mitmLock.RLock()
+		defer proxy.mitmLock.RUnlock()
 		// Try to MITM the connection
 		downstreamMITM, upstreamMITM, mitming, err := proxy.mitmIC.MITM(downstream, upstream)
 		if err != nil {
@@ -251,6 +253,9 @@ func (dbs *defaultBufferSource) Put(buf []byte) {
 }
 
 func (proxy *proxy) defaultShouldMITM(req *http.Request, upstreamAddr string) bool {
+	proxy.mitmLock.RLock()
+	defer proxy.mitmLock.RUnlock()
+
 	if proxy.mitmIC == nil {
 		return false
 	}
