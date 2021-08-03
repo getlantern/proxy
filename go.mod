@@ -13,13 +13,13 @@ require (
 	github.com/getlantern/idletiming v0.0.0-20200228204104-10036786eac5
 	github.com/getlantern/keyman v0.0.0-20180207174507-f55e7280e93a
 	github.com/getlantern/mitm v0.0.0-20180205214248-4ce456bae650
-	github.com/getlantern/mockconn v0.0.0-20191023022503-481dbcceeb58
-	github.com/getlantern/netx v0.0.0-20190110220209-9912de6f94fd
+	github.com/getlantern/mockconn v0.0.0-20200818071412-cb30d065a848
+	github.com/getlantern/netx v0.0.0-20210803075350-eb4fa6261e47
 	github.com/getlantern/preconn v0.0.0-20180328114929-0b5766010efe
 	github.com/getlantern/reconn v0.0.0-20161128113912-7053d017511c
 	github.com/getlantern/tlsdefaults v0.0.0-20171004213447-cf35cfd0b1b4
 	github.com/getlantern/waitforserver v1.0.1
 	github.com/google/go-cmp v0.5.2 // indirect
 	github.com/mitchellh/go-server-timing v1.0.0
-	github.com/stretchr/testify v1.5.1
+	github.com/stretchr/testify v1.6.1
 )
