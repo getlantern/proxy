@@ -20,7 +20,7 @@ type Context interface {
 	context.Context
 
 	// DownstreamConn retrieves the downstream connection from the given Context.
-	DownstreamConn() net.Conn
+	DownstreamConn() net.Conn // used by http-proxy-lantern in several places
 
 	// RequestNumber indicates how many requests have been received on the current
 	// connection. The RequestNumber for the first request is 1, for the second is 2
@@ -44,7 +44,7 @@ type Context interface {
 	WithMITMing() Context
 
 	// IsMITMing indicates whether or the proxy is MITMing the current connection.
-	IsMITMing() bool
+	IsMITMing() bool // used in flashlight: https://github.com/getlantern/flashlight/blob/fface57fa89abb34282101360879e15f66f30a58/client/handler.go#L100
 
 	// WithValue mimics the method on context.Context
 	WithValue(key, val interface{}) Context

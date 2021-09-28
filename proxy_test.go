@@ -103,17 +103,13 @@ func TestRequestAware(t *testing.T) {
 	waitforserver.WaitForServer("tcp", addr, 5*time.Second)
 
 	var tr idleClosingTransport = &http.Transport{
-		DialContext: p.requestAwareDial,
+		DialContext: p.requestAwareDial(new(filters.ConnectionMetadata)),
 	}
 
 	next := p.nextNonCONNECT(tr)
 	req, err := http.NewRequest("GET", "http://127.0.0.1:3000", nil)
 
-	ctx := context.Background()
-	ctx = withAwareConn(ctx)
-	fctx := filters.AdaptContext(ctx)
-
-	_, ctx, err = next(fctx, req)
+	_, _, err = next(new(filters.ConnectionMetadata), req)
 
 	assert.NoError(t, err)
 	assert.Equal(t, "true", serverRequest.Header.Get("x-aware"))
@@ -122,7 +118,7 @@ func TestRequestAware(t *testing.T) {
 func TestDialFailureHTTP(t *testing.T) {
 	errorText := "I don't want to dial"
 	d := mockconn.FailingDialer(errors.New(errorText))
-	onError := func(ctx filters.Context, req *http.Request, read bool, err error) *http.Response {
+	onError := func(cm *filters.ConnectionMetadata, req *http.Request, read bool, err error) *http.Response {
 		return &http.Response{
 			StatusCode: http.StatusBadGateway,
 			Body:       ioutil.NopCloser(bytes.NewReader([]byte(err.Error()))),
@@ -295,7 +291,7 @@ func TestDialFailureCONNECTDontWaitForUpstream(t *testing.T) {
 
 func TestPanicRecover(t *testing.T) {
 	p := newProxy(&Opts{
-		Filter: filters.FilterFunc(func(ctx filters.Context, req *http.Request, next filters.Next) (*http.Response, filters.Context, error) {
+		Filter: filters.FilterFunc(func(cm *filters.ConnectionMetadata, req *http.Request, next filters.Next) (*http.Response, *filters.ConnectionMetadata, error) {
 			panic(errors.New("I'm panicking!"))
 		}),
 	})
@@ -327,15 +323,15 @@ func doTestConnect(t *testing.T, okWaitsForUpstream bool) {
 			mx.Unlock()
 			return d.Dial(net, addr)
 		},
-		Filter: filters.FilterFunc(func(ctx filters.Context, req *http.Request, next filters.Next) (*http.Response, filters.Context, error) {
+		Filter: filters.FilterFunc(func(cm *filters.ConnectionMetadata, req *http.Request, next filters.Next) (*http.Response, *filters.ConnectionMetadata, error) {
 			req.Host = req.Host + "80"
 			req.URL.Host = req.Host
-			return next(ctx, req)
+			return next(cm, req)
 		}),
 	})
 	received := &bytes.Buffer{}
 	conn := mockconn.New(received, strings.NewReader(""))
-	err := p.Connect(context.Background(), conn, conn, originalOrigin)
+	err := p.Connect(conn, conn, originalOrigin)
 	if !assert.NoError(t, err) {
 		return
 	}
@@ -348,8 +344,8 @@ func doTestConnect(t *testing.T, okWaitsForUpstream bool) {
 
 func TestShortCircuitHTTP(t *testing.T) {
 	p := newProxy(&Opts{
-		Filter: filters.FilterFunc(func(ctx filters.Context, req *http.Request, next filters.Next) (*http.Response, filters.Context, error) {
-			return filters.ShortCircuit(ctx, req, &http.Response{
+		Filter: filters.FilterFunc(func(cm *filters.ConnectionMetadata, req *http.Request, next filters.Next) (*http.Response, *filters.ConnectionMetadata, error) {
+			return filters.ShortCircuit(cm, req, &http.Response{
 				Header:     make(http.Header),
 				StatusCode: http.StatusForbidden,
 				Close:      true,
@@ -369,8 +365,8 @@ func TestShortCircuitHTTP(t *testing.T) {
 
 func TestShortCircuitCONNECT(t *testing.T) {
 	p := newProxy(&Opts{
-		Filter: filters.FilterFunc(func(ctx filters.Context, req *http.Request, next filters.Next) (*http.Response, filters.Context, error) {
-			return filters.ShortCircuit(ctx, req, &http.Response{
+		Filter: filters.FilterFunc(func(cm *filters.ConnectionMetadata, req *http.Request, next filters.Next) (*http.Response, *filters.ConnectionMetadata, error) {
+			return filters.ShortCircuit(cm, req, &http.Response{
 				Header:     make(http.Header),
 				StatusCode: http.StatusForbidden,
 			})
@@ -456,7 +452,7 @@ func TestHTTPDownstreamError(t *testing.T) {
 				return
 			}
 			conn.Close()
-			go p.Handle(context.Background(), conn, conn)
+			go p.Handle(conn, conn)
 		}
 	}()
 
@@ -554,28 +550,28 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 	}
 
 	first := true
-	filter := filters.FilterFunc(func(ctx filters.Context, req *http.Request, next filters.Next) (*http.Response, filters.Context, error) {
+	filter := filters.FilterFunc(func(cm *filters.ConnectionMetadata, req *http.Request, next filters.Next) (*http.Response, *filters.ConnectionMetadata, error) {
 		if req.RemoteAddr == "" {
 			t.Fatal("Request missing RemoteAddr!")
 		}
 		if discardFirstRequest && first {
 			first = false
-			return filters.Discard(ctx, req)
+			return filters.Discard(cm, req)
 		}
 		req.Header.Set(testReqHeader, testHeaderValue)
-		resp, nextCtx, nextErr := next(ctx, req)
+		resp, nextCM, nextErr := next(cm, req)
 		if resp != nil {
 			resp.Header.Set(testRespHeader, testHeaderValue)
 		}
 
 		isConnect := req.Method == http.MethodConnect
 		if !isConnect && shouldMITM {
-			assert.True(t, ctx.IsMITMing())
+			assert.True(t, cm.IsMITMing())
 		} else {
-			assert.False(t, ctx.IsMITMing())
+			assert.False(t, cm.IsMITMing())
 		}
 
-		return resp, nextCtx, nextErr
+		return resp, nextCM, nextErr
 	})
 
 	isConnect := requestMethod == "CONNECT"
@@ -741,7 +737,7 @@ func roundTrip(p Proxy, req *http.Request, readResponse bool) (resp *http.Respon
 	}
 	received := &bytes.Buffer{}
 	conn := mockconn.New(received, toSend)
-	handleErr = p.Handle(context.Background(), conn, conn)
+	handleErr = p.Handle(conn, conn)
 	if readResponse {
 		resp, roundTripErr = http.ReadResponse(bufio.NewReader(bytes.NewReader(received.Bytes())), req)
 	}
@@ -858,7 +854,7 @@ func TestPipeliningWithIdleTimingServer(t *testing.T) {
 				return
 			}
 			t.Log("Proxy Accepted")
-			go p.Handle(context.Background(), conn, conn)
+			go p.Handle(conn, conn)
 		}
 	}()
 

@@ -40,11 +40,11 @@ type DialFunc func(ctx context.Context, isCONNECT bool, network, addr string) (c
 type Proxy interface {
 	// Handle handles a single connection, with in specified separately in case
 	// there's a buffered reader or something of that sort in use.
-	Handle(ctx context.Context, in io.Reader, conn net.Conn) error
+	Handle(in io.Reader, conn net.Conn) error
 
 	// Connect opens a CONNECT tunnel to the origin without requiring a CONNECT
 	// request to first be sent on conn. It will not reply with CONNECT OK.
-	Connect(ctx context.Context, in io.Reader, conn net.Conn, origin string) error
+	Connect(in io.Reader, conn net.Conn, origin string) error
 
 	// Serve runs a server on the given Listener
 	Serve(l net.Listener) error
@@ -84,7 +84,7 @@ type Opts struct {
 	// in the event that there's an error round-tripping upstream. If the function
 	// returns no response, nothing is written to the client. Read indicates
 	// whether the error occurred on reading a request or not. (HTTP only)
-	OnError func(ctx filters.Context, req *http.Request, read bool, err error) *http.Response
+	OnError func(cm *filters.ConnectionMetadata, req *http.Request, read bool, err error) *http.Response
 
 	// OKWaitsForUpstream specifies whether or not to wait on dialing upstream
 	// before responding OK to a CONNECT request (CONNECT only).
@@ -165,12 +165,12 @@ func (p *proxy) ApplyMITMOptions(MITMOpts *mitm.Opts) (mitmErr error) {
 // OnFirstOnly returns a filter that applies the given filter only on the first
 // request on a given connection.
 func OnFirstOnly(filter filters.Filter) filters.Filter {
-	return filters.FilterFunc(func(ctx filters.Context, req *http.Request, next filters.Next) (*http.Response, filters.Context, error) {
-		requestNumber := ctx.RequestNumber()
+	return filters.FilterFunc(func(cm *filters.ConnectionMetadata, req *http.Request, next filters.Next) (*http.Response, *filters.ConnectionMetadata, error) {
+		requestNumber := cm.RequestNumber()
 		if requestNumber == 1 {
-			return filter.Apply(ctx, req, next)
+			return filter.Apply(cm, req, next)
 		}
-		return next(ctx, req)
+		return next(cm, req)
 	})
 }
 

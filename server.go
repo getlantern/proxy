@@ -1,7 +1,6 @@
 package proxy
 
 import (
-	"context"
 	"net"
 
 	"github.com/getlantern/errors"
@@ -14,6 +13,6 @@ func (proxy *proxy) Serve(l net.Listener) error {
 		if err != nil {
 			return errors.New("Unable to accept: %v", err)
 		}
-		go proxy.Handle(context.Background(), conn, conn)
+		go proxy.Handle(conn, conn)
 	}
 }

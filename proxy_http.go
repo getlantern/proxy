@@ -28,17 +28,8 @@ func (opts *Opts) applyHTTPDefaults() {
 }
 
 // Handle implements the interface Proxy
-func (proxy *proxy) Handle(ctx context.Context, downstreamIn io.Reader, downstream net.Conn) (err error) {
-	defer func() {
-		p := recover()
-		if p != nil {
-			safeClose(downstream)
-			err = errors.New("Recovered from panic handling connection: %v", p)
-		}
-	}()
-
-	err = proxy.handle(ctx, downstreamIn, downstream, nil)
-	return
+func (proxy *proxy) Handle(downstreamIn io.Reader, downstream net.Conn) (err error) {
+	return proxy.handle(downstreamIn, downstream, nil, true)
 }
 
 func safeClose(conn net.Conn) {
@@ -75,7 +66,14 @@ func (proxy *proxy) logInitialReadError(downstream net.Conn, err error) error {
 	return log.Errorf("Initial ReadRequest: %v from %v", err, r)
 }
 
-func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstream net.Conn, upstream net.Conn) error {
+func (proxy *proxy) handle(downstreamIn io.Reader, downstream net.Conn, upstream net.Conn, respondOK bool) (err error) {
+	defer func() {
+		p := recover()
+		if p != nil {
+			safeClose(downstream)
+			err = errors.New("Recovered from panic handling connection: %v", p)
+		}
+	}()
 	defer func() {
 		if closeErr := downstream.Close(); closeErr != nil {
 			log.Tracef("Error closing downstream connection: %s", closeErr)
@@ -83,26 +81,15 @@ func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstre
 	}()
 
 	downstreamBuffered := bufio.NewReader(downstreamIn)
-	fctx := filters.WrapContext(withAwareConn(ctx), downstream)
+	// TODO: the previous withAwareConn call just sets an empty map... is that necessary?
+	// fctx := filters.WrapContext(withAwareConn(ctx), downstream)
 
 	// Read initial request
 	req, err := http.ReadRequest(downstreamBuffered)
-	if req != nil {
-		remoteAddr := downstream.RemoteAddr()
-		if remoteAddr != nil {
-			req.RemoteAddr = remoteAddr.String()
-		}
-		if origURLScheme(ctx) == "" {
-			fctx = fctx.
-				WithValue(ctxKeyOrigURLScheme, req.URL.Scheme).
-				WithValue(ctxKeyOrigURLHost, req.URL.Host).
-				WithValue(ctxKeyOrigHost, req.Host)
-		}
-	}
-
 	if err != nil {
 		if isUnexpected(err) {
-			errResp := proxy.OnError(fctx, req, true, err)
+			cm := filters.NewConnectionMetadata(nil, upstream, downstream)
+			errResp := proxy.OnError(cm, req, true, err)
 			if errResp != nil {
 				proxy.writeResponse(downstream, req, errResp)
 			}
@@ -111,14 +98,18 @@ func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstre
 		}
 		return nil
 	}
+	remoteAddr := downstream.RemoteAddr()
+	if remoteAddr != nil {
+		req.RemoteAddr = remoteAddr.String()
+	}
+	cm := filters.NewConnectionMetadata(req, upstream, downstream)
 
 	var next filters.Next
 	if req.Method == http.MethodConnect {
-		next = proxy.nextCONNECT(downstream)
+		next = proxy.nextCONNECT(downstream, respondOK)
 	} else {
 		var tr idleClosingTransport
 		if upstream != nil {
-			setUpstreamForAwareConn(fctx, upstream)
 			tr = &addressLoggingTransport{
 				Transport: &http.Transport{
 					DialContext: func(ctx context.Context, net, addr string) (net.Conn, error) {
@@ -135,7 +126,7 @@ func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstre
 			}
 		} else {
 			tr = &http.Transport{
-				DialContext:     proxy.requestAwareDial,
+				DialContext:     proxy.requestAwareDial(cm),
 				IdleConnTimeout: proxy.IdleTimeout,
 				// since we have one transport per downstream connection, we don't need
 				// more than this
@@ -147,57 +138,64 @@ func (proxy *proxy) handle(ctx context.Context, downstreamIn io.Reader, downstre
 		next = proxy.nextNonCONNECT(tr)
 	}
 
-	return proxy.processRequests(fctx, req.RemoteAddr, req, downstream, downstreamBuffered, next)
+	return proxy.processRequests(cm, req.RemoteAddr, req, downstream, downstreamBuffered, next, respondOK)
 }
 
-func (proxy *proxy) requestAwareDial(ctx context.Context, network, addr string) (net.Conn, error) {
-	conn, err := proxy.Dial(ctx, false, network, addr)
-	if err == nil {
-		// On first dialing conn, handle RequestAware
-		setUpstreamForAwareConn(ctx, conn)
-		handleRequestAware(ctx)
+func (proxy *proxy) requestAwareDial(cm *filters.ConnectionMetadata) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		conn, err := proxy.Dial(ctx, false, network, addr)
+		if err == nil {
+			// On first dialing conn, handle RequestAware
+			cm.SetUpstream(conn)
+			handleRequestAware(cm)
+		}
+		return conn, err
 	}
-	return conn, err
 }
 
-func (proxy *proxy) nextNonCONNECT(tr idleClosingTransport) func(ctx filters.Context, modifiedReq *http.Request) (*http.Response, filters.Context, error) {
-	return func(ctx filters.Context, modifiedReq *http.Request) (*http.Response, filters.Context, error) {
-		modifiedReq = modifiedReq.WithContext(ctx)
+func (proxy *proxy) nextNonCONNECT(tr idleClosingTransport) func(cm *filters.ConnectionMetadata, modifiedReq *http.Request) (*http.Response, *filters.ConnectionMetadata, error) {
+	return func(cm *filters.ConnectionMetadata, modifiedReq *http.Request) (*http.Response, *filters.ConnectionMetadata, error) {
+		modifiedReq = modifiedReq.WithContext(cm.ToContext())
 		modifiedReq = prepareRequest(modifiedReq)
 
 		// Note that the following request aware handling only applies when the upstream
 		// connection has already been made -- i.e. when there is a net.Conn that is possibly
 		// request aware. In particular it does not apply on the first request because the
 		// RoundTrip call creates the upstream connection in that case. See DialContext above.
-		setRequestForAwareConn(ctx, modifiedReq)
-		handleRequestAware(ctx)
+		cm.SetRequestAwareRequest(modifiedReq)
+		handleRequestAware(cm)
 		resp, err := tr.RoundTrip(modifiedReq)
-		handleResponseAware(ctx, modifiedReq, resp, err)
+		handleResponseAware(cm, modifiedReq, resp, err)
 		if err != nil {
 			err = errors.New("Unable to round-trip http request to upstream: %v", err)
 		}
-		return resp, ctx, err
+		return resp, cm, err
 	}
 }
 
-func (proxy *proxy) processRequests(ctx filters.Context, remoteAddr string, req *http.Request, downstream net.Conn, downstreamBuffered *bufio.Reader, next filters.Next) error {
+// TODO: why are upstreamAddr, upstream, and downstream passed in separately here? They should have
+// been on the context, right (and therefore now md)?
+func (proxy *proxy) processRequests(cm *filters.ConnectionMetadata,
+	remoteAddr string, req *http.Request, downstream net.Conn, downstreamBuffered *bufio.Reader,
+	next filters.Next, respondOK bool) error {
+
 	var readErr error
 	var resp *http.Response
 	var err error
 
 	for {
 		if req.URL.Scheme == "" {
-			req.URL.Scheme = origURLScheme(ctx)
+			req.URL.Scheme = cm.OriginalURLScheme()
 		}
 		if req.URL.Host == "" {
-			req.URL.Host = origURLHost(ctx)
+			req.URL.Host = cm.OriginalURLHost()
 		}
 		if req.Host == "" {
-			req.Host = origHost(ctx)
+			req.Host = cm.OriginalHost()
 		}
-		resp, ctx, err = proxy.Filter.Apply(ctx, req, next)
+		resp, cm, err = proxy.Filter.Apply(cm, req, next)
 		if err != nil && resp == nil {
-			resp = proxy.OnError(ctx, req, false, err)
+			resp = proxy.OnError(cm, req, false, err)
 			if resp != nil {
 				log.Debugf("Closing client connection on error: %v", err)
 				// On error, we will always close the connection
@@ -221,8 +219,8 @@ func (proxy *proxy) processRequests(ctx filters.Context, remoteAddr string, req 
 			return err
 		}
 
-		upstream := upstreamConn(ctx)
-		upstreamAddr := upstreamAddr(ctx)
+		upstream := cm.Upstream()
+		upstreamAddr := cm.UpstreamAddr()
 		isConnect := upstream != nil || upstreamAddr != ""
 
 		buffered := downstreamBuffered.Buffered()
@@ -232,7 +230,7 @@ func (proxy *proxy) processRequests(ctx filters.Context, remoteAddr string, req 
 		}
 
 		if isConnect {
-			return proxy.proceedWithConnect(ctx, req, upstreamAddr, upstream, downstream)
+			return proxy.proceedWithConnect(cm, req, upstreamAddr, upstream, downstream, respondOK)
 		}
 
 		if req.Close {
@@ -250,7 +248,7 @@ func (proxy *proxy) processRequests(ctx filters.Context, remoteAddr string, req 
 		req, readErr = http.ReadRequest(downstreamBuffered)
 		if readErr != nil {
 			if isUnexpected(readErr) {
-				errResp := proxy.OnError(ctx, req, true, readErr)
+				errResp := proxy.OnError(cm, req, true, readErr)
 				if errResp != nil {
 					proxy.writeResponse(downstream, req, errResp)
 				}
@@ -260,14 +258,14 @@ func (proxy *proxy) processRequests(ctx filters.Context, remoteAddr string, req 
 		}
 
 		// Preserve remote address from original request
-		ctx = ctx.IncrementRequestNumber()
+		cm.IncrementRequestNumber()
 		req.RemoteAddr = remoteAddr
-		req = req.WithContext(ctx)
+		req = req.WithContext(cm.ToContext())
 	}
 }
 
-func handleRequestAware(ctx context.Context) {
-	upstream := upstreamForAwareConn(ctx)
+func handleRequestAware(cm *filters.ConnectionMetadata) {
+	upstream := cm.Upstream()
 	if upstream == nil {
 		return
 	}
@@ -275,15 +273,14 @@ func handleRequestAware(ctx context.Context) {
 	netx.WalkWrapped(upstream, func(wrapped net.Conn) bool {
 		switch t := wrapped.(type) {
 		case RequestAware:
-			req := requestForAwareConn(ctx)
-			t.OnRequest(req)
+			t.OnRequest(cm.RequestAwareRequest())
 		}
 		return true
 	})
 }
 
-func handleResponseAware(ctx context.Context, req *http.Request, resp *http.Response, err error) {
-	upstream := upstreamForAwareConn(ctx)
+func handleResponseAware(cm *filters.ConnectionMetadata, req *http.Request, resp *http.Response, err error) {
+	upstream := cm.Upstream()
 	if upstream == nil {
 		return
 	}
@@ -462,11 +459,11 @@ func isUnexpected(err error) bool {
 		!strings.Contains(text, "connection reset by peer")
 }
 
-func defaultFilter(ctx filters.Context, req *http.Request, next filters.Next) (*http.Response, filters.Context, error) {
-	return next(ctx, req)
+func defaultFilter(cm *filters.ConnectionMetadata, req *http.Request, next filters.Next) (*http.Response, *filters.ConnectionMetadata, error) {
+	return next(cm, req)
 }
 
-func defaultOnError(ctx filters.Context, req *http.Request, read bool, err error) *http.Response {
+func defaultOnError(md *filters.ConnectionMetadata, req *http.Request, read bool, err error) *http.Response {
 	return nil
 }
 

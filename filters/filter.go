@@ -9,23 +9,23 @@ import (
 
 // Filter supports intercepting and modifying http requests and responses
 type Filter interface {
-	Apply(ctx Context, req *http.Request, next Next) (*http.Response, Context, error)
+	Apply(md *ConnectionMetadata, req *http.Request, next Next) (*http.Response, *ConnectionMetadata, error)
 }
 
 // FilterFunc adapts a function to a Filter
-type FilterFunc func(ctx Context, req *http.Request, next Next) (*http.Response, Context, error)
+type FilterFunc func(cm *ConnectionMetadata, req *http.Request, next Next) (*http.Response, *ConnectionMetadata, error)
 
 // Apply implements the interface Filter
-func (ff FilterFunc) Apply(ctx Context, req *http.Request, next Next) (*http.Response, Context, error) {
-	return ff(ctx, req, next)
+func (ff FilterFunc) Apply(cm *ConnectionMetadata, req *http.Request, next Next) (*http.Response, *ConnectionMetadata, error) {
+	return ff(cm, req, next)
 }
 
 // Next is a function that's used to indicate that request processing should
 // continue as usual.
-type Next func(ctx Context, req *http.Request) (*http.Response, Context, error)
+type Next func(cm *ConnectionMetadata, req *http.Request) (*http.Response, *ConnectionMetadata, error)
 
 // ShortCircuit is a convenience method for creating short-circuiting responses.
-func ShortCircuit(ctx Context, req *http.Request, resp *http.Response) (*http.Response, Context, error) {
+func ShortCircuit(cm *ConnectionMetadata, req *http.Request, resp *http.Response) (*http.Response, *ConnectionMetadata, error) {
 	if resp.Header == nil {
 		resp.Header = make(http.Header)
 	}
@@ -36,12 +36,12 @@ func ShortCircuit(ctx Context, req *http.Request, resp *http.Response) (*http.Re
 		resp.ContentLength = -1
 		resp.TransferEncoding = []string{"chunked"}
 	}
-	return resp, ctx, nil
+	return resp, cm, nil
 }
 
 // Fail fails processing, returning a response with the given status code and
 // description populated from error.
-func Fail(ctx Context, req *http.Request, statusCode int, err error) (*http.Response, Context, error) {
+func Fail(cm *ConnectionMetadata, req *http.Request, statusCode int, err error) (*http.Response, *ConnectionMetadata, error) {
 	errString := err.Error()
 	resp := &http.Response{
 		Proto:         req.Proto,
@@ -53,17 +53,17 @@ func Fail(ctx Context, req *http.Request, statusCode int, err error) (*http.Resp
 		ContentLength: int64(len(errString)),
 		Close:         true,
 	}
-	return resp, ctx, err
+	return resp, cm, err
 }
 
 // Discard discards the given request. Make sure to use this when discarding
 // requests in order to make sure that the request body is read.
-func Discard(ctx Context, req *http.Request) (*http.Response, Context, error) {
+func Discard(cm *ConnectionMetadata, req *http.Request) (*http.Response, *ConnectionMetadata, error) {
 	if req.Body != nil {
 		io.Copy(ioutil.Discard, req.Body)
 		req.Body.Close()
 	}
-	return nil, ctx, nil
+	return nil, cm, nil
 }
 
 // Chain is a chain of Filters that acts as an http.Handler.
@@ -89,16 +89,16 @@ func (c Chain) Prepend(pre Filter) Chain {
 }
 
 // Apply implements the interface Filter
-func (c Chain) Apply(ctx Context, req *http.Request, next Next) (*http.Response, Context, error) {
-	return c.apply(ctx, req, next, 0)
+func (c Chain) Apply(cm *ConnectionMetadata, req *http.Request, next Next) (*http.Response, *ConnectionMetadata, error) {
+	return c.apply(cm, req, next, 0)
 }
 
-func (c Chain) apply(ctx Context, req *http.Request, next Next, idx int) (*http.Response, Context, error) {
+func (c Chain) apply(cm *ConnectionMetadata, req *http.Request, next Next, idx int) (*http.Response, *ConnectionMetadata, error) {
 	if idx == len(c) {
-		return next(ctx, req)
+		return next(cm, req)
 	}
-	return c[idx].Apply(ctx, req,
-		func(ctx Context, req *http.Request) (*http.Response, Context, error) {
-			return c.apply(ctx, req, next, idx+1)
+	return c[idx].Apply(cm, req,
+		func(cm *ConnectionMetadata, req *http.Request) (*http.Response, *ConnectionMetadata, error) {
+			return c.apply(cm, req, next, idx+1)
 		})
 }
