@@ -79,7 +79,7 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn, respondOK bool) filters.Nex
 			// than the proxy and continue to consider the proxy good. See the extensive
 			// discussion here: https://github.com/getlantern/lantern/issues/5514.
 			if respondOK {
-				resp, nextCM, _ = filters.ShortCircuit(cm, modifiedReq, &http.Response{
+				resp, nextCM, _ = filters.ShortCircuit(nextCM, modifiedReq, &http.Response{
 					StatusCode: http.StatusOK,
 				})
 			}

@@ -155,7 +155,6 @@ func (proxy *proxy) requestAwareDial(cm *filters.ConnectionMetadata) func(ctx co
 
 func (proxy *proxy) nextNonCONNECT(tr idleClosingTransport) func(cm *filters.ConnectionMetadata, modifiedReq *http.Request) (*http.Response, *filters.ConnectionMetadata, error) {
 	return func(cm *filters.ConnectionMetadata, modifiedReq *http.Request) (*http.Response, *filters.ConnectionMetadata, error) {
-		modifiedReq = modifiedReq.WithContext(cm.ToContext())
 		modifiedReq = prepareRequest(modifiedReq)
 
 		// Note that the following request aware handling only applies when the upstream
@@ -260,7 +259,6 @@ func (proxy *proxy) processRequests(cm *filters.ConnectionMetadata,
 		// Preserve remote address from original request
 		cm.IncrementRequestNumber()
 		req.RemoteAddr = remoteAddr
-		req = req.WithContext(cm.ToContext())
 	}
 }
 

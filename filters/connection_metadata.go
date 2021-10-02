@@ -1,7 +1,6 @@
 package filters
 
 import (
-	"context"
 	"net"
 	"net/http"
 )
@@ -88,13 +87,6 @@ func (cm *ConnectionMetadata) IsMITMing() bool {
 // RequestAwareRequest is the request used by RequestAware connections.
 func (cm *ConnectionMetadata) RequestAwareRequest() *http.Request {
 	return cm.requestAwareRequest
-}
-
-// ToContext creates a new context.Context with all of the connection metadata included.
-// TODO: do we need this?
-func (cm *ConnectionMetadata) ToContext() context.Context {
-	// TODO: implement me!
-	return nil
 }
 
 // Clone this object.

@@ -102,14 +102,15 @@ func TestRequestAware(t *testing.T) {
 
 	waitforserver.WaitForServer("tcp", addr, 5*time.Second)
 
+	cm := new(filters.ConnectionMetadata)
 	var tr idleClosingTransport = &http.Transport{
-		DialContext: p.requestAwareDial(new(filters.ConnectionMetadata)),
+		DialContext: p.requestAwareDial(cm),
 	}
 
 	next := p.nextNonCONNECT(tr)
 	req, err := http.NewRequest("GET", "http://127.0.0.1:3000", nil)
 
-	_, _, err = next(new(filters.ConnectionMetadata), req)
+	_, _, err = next(cm, req)
 
 	assert.NoError(t, err)
 	assert.Equal(t, "true", serverRequest.Header.Get("x-aware"))
@@ -532,9 +533,7 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 		w.Write([]byte(req.Host))
 	}))
 
-	requestNumber := int64(0)
 	dial := func(ctx context.Context, isConnect bool, network, addr string) (conn net.Conn, err error) {
-		atomic.StoreInt64(&requestNumber, int64(filters.AdaptContext(ctx).RequestNumber()))
 		if requestMethod == http.MethodGet {
 			conn, err = tls.Dial("tcp", l.Addr().String(), &tls.Config{
 				ServerName: "localhost",
@@ -550,7 +549,9 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 	}
 
 	first := true
+	requestNumber := int64(0)
 	filter := filters.FilterFunc(func(cm *filters.ConnectionMetadata, req *http.Request, next filters.Next) (*http.Response, *filters.ConnectionMetadata, error) {
+		atomic.StoreInt64(&requestNumber, int64(cm.RequestNumber()))
 		if req.RemoteAddr == "" {
 			t.Fatal("Request missing RemoteAddr!")
 		}
