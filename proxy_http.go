@@ -110,6 +110,7 @@ func (proxy *proxy) handle(downstreamIn io.Reader, downstream net.Conn, upstream
 	} else {
 		var tr idleClosingTransport
 		if upstream != nil {
+			cm.SetRequestAwareUpstream(upstream)
 			tr = &addressLoggingTransport{
 				Transport: &http.Transport{
 					DialContext: func(ctx context.Context, net, addr string) (net.Conn, error) {
@@ -146,7 +147,7 @@ func (proxy *proxy) requestAwareDial(cm *filters.ConnectionMetadata) func(ctx co
 		conn, err := proxy.Dial(ctx, false, network, addr)
 		if err == nil {
 			// On first dialing conn, handle RequestAware
-			cm.SetUpstream(conn)
+			cm.SetRequestAwareUpstream(conn)
 			handleRequestAware(cm)
 		}
 		return conn, err
@@ -263,7 +264,7 @@ func (proxy *proxy) processRequests(cm *filters.ConnectionMetadata,
 }
 
 func handleRequestAware(cm *filters.ConnectionMetadata) {
-	upstream := cm.Upstream()
+	upstream := cm.RequestAwareUpstream()
 	if upstream == nil {
 		return
 	}
@@ -278,7 +279,7 @@ func handleRequestAware(cm *filters.ConnectionMetadata) {
 }
 
 func handleResponseAware(cm *filters.ConnectionMetadata, req *http.Request, resp *http.Response, err error) {
-	upstream := cm.Upstream()
+	upstream := cm.RequestAwareUpstream()
 	if upstream == nil {
 		return
 	}

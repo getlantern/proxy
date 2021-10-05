@@ -25,7 +25,8 @@ type ConnectionMetadata struct {
 	// Used by proxy.RequestAware connections.
 	// TODO: this is horrible; probably evidence this needs to be in the proxy package
 	// TODO: could this just be 'lastRequest'?
-	requestAwareRequest *http.Request
+	requestAwareRequest  *http.Request
+	requestAwareUpstream net.Conn
 }
 
 // NewConnectionMetadata creates a new metadata object. Any of the inputs may be nil.
@@ -89,6 +90,11 @@ func (cm *ConnectionMetadata) RequestAwareRequest() *http.Request {
 	return cm.requestAwareRequest
 }
 
+// RequestAwareUpstream is the upstream connection used by RequestAware connections.
+func (cm *ConnectionMetadata) RequestAwareUpstream() net.Conn {
+	return cm.requestAwareUpstream
+}
+
 // Clone this object.
 func (cm *ConnectionMetadata) Clone() *ConnectionMetadata {
 	return &ConnectionMetadata{
@@ -97,6 +103,7 @@ func (cm *ConnectionMetadata) Clone() *ConnectionMetadata {
 		cm.requestNumber,
 		cm.mitming,
 		cm.requestAwareRequest,
+		cm.requestAwareUpstream,
 	}
 }
 
@@ -131,4 +138,9 @@ func (cm *ConnectionMetadata) SetMITMing(isMITMing bool) {
 // SetRequestAwareRequest sets the request used by RequestAware connections.
 func (cm *ConnectionMetadata) SetRequestAwareRequest(req *http.Request) {
 	cm.requestAwareRequest = req
+}
+
+// SetRequestAwareUpstream sets the upstream connection used by RequestAware connections.
+func (cm *ConnectionMetadata) SetRequestAwareUpstream(upstream net.Conn) {
+	cm.requestAwareUpstream = upstream
 }
