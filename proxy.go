@@ -84,7 +84,7 @@ type Opts struct {
 	// in the event that there's an error round-tripping upstream. If the function
 	// returns no response, nothing is written to the client. Read indicates
 	// whether the error occurred on reading a request or not. (HTTP only)
-	OnError func(cm *filters.ConnectionMetadata, req *http.Request, read bool, err error) *http.Response
+	OnError func(cs *filters.ConnectionState, req *http.Request, read bool, err error) *http.Response
 
 	// OKWaitsForUpstream specifies whether or not to wait on dialing upstream
 	// before responding OK to a CONNECT request (CONNECT only).
@@ -165,12 +165,12 @@ func (p *proxy) ApplyMITMOptions(MITMOpts *mitm.Opts) (mitmErr error) {
 // OnFirstOnly returns a filter that applies the given filter only on the first
 // request on a given connection.
 func OnFirstOnly(filter filters.Filter) filters.Filter {
-	return filters.FilterFunc(func(cm *filters.ConnectionMetadata, req *http.Request, next filters.Next) (*http.Response, *filters.ConnectionMetadata, error) {
-		requestNumber := cm.RequestNumber()
+	return filters.FilterFunc(func(cs *filters.ConnectionState, req *http.Request, next filters.Next) (*http.Response, *filters.ConnectionState, error) {
+		requestNumber := cs.RequestNumber()
 		if requestNumber == 1 {
-			return filter.Apply(cm, req, next)
+			return filter.Apply(cs, req, next)
 		}
-		return next(cm, req)
+		return next(cs, req)
 	})
 }
 

@@ -24,8 +24,8 @@ func TestFilterChainEmpty(t *testing.T) {
 	}
 	expectedResp.Header.Set("X-Hi", "Hello")
 	chain := Join()
-	resp, _, err := chain.Apply(nil, nil, func(cm *ConnectionMetadata, req *http.Request) (*http.Response, *ConnectionMetadata, error) {
-		return expectedResp, cm, nil
+	resp, _, err := chain.Apply(nil, nil, func(cs *ConnectionState, req *http.Request) (*http.Response, *ConnectionState, error) {
+		return expectedResp, cs, nil
 	})
 	assert.NoError(t, err)
 	assert.Equal(t, expectedResp, resp)
@@ -40,15 +40,15 @@ func doTestFilterChain(t *testing.T, shortCircuit bool) {
 
 	req, _ := http.NewRequest(http.MethodGet, "http://example.com", nil)
 	calledFinalNext := false
-	finalNext := func(cm *ConnectionMetadata, req *http.Request) (*http.Response, *ConnectionMetadata, error) {
+	finalNext := func(cs *ConnectionState, req *http.Request) (*http.Response, *ConnectionState, error) {
 		calledFinalNext = true
 		return &http.Response{
 			Request:    req,
 			Header:     make(http.Header),
 			StatusCode: http.StatusConflict,
-		}, cm, sampleErr
+		}, cs, sampleErr
 	}
-	resp, _, err := chain.Apply(new(ConnectionMetadata), req, finalNext)
+	resp, _, err := chain.Apply(new(ConnectionState), req, finalNext)
 	expectedErr := sampleErr
 	if shortCircuit {
 		expectedErr = nil
@@ -78,10 +78,10 @@ type testFilter struct {
 	value string
 }
 
-func (f *testFilter) Apply(cm *ConnectionMetadata, req *http.Request, next Next) (*http.Response, *ConnectionMetadata, error) {
+func (f *testFilter) Apply(cs *ConnectionState, req *http.Request, next Next) (*http.Response, *ConnectionState, error) {
 	if f.key == "" {
 		// short circuit
-		return ShortCircuit(cm, req, &http.Response{
+		return ShortCircuit(cs, req, &http.Response{
 			Request:    req,
 			StatusCode: http.StatusMovedPermanently,
 			Body:       ioutil.NopCloser(strings.NewReader("shortcircuited")),
@@ -89,9 +89,9 @@ func (f *testFilter) Apply(cm *ConnectionMetadata, req *http.Request, next Next)
 	}
 	req.Header.Add("In-Order", f.key)
 	req.Header.Set(f.key, f.value)
-	resp, cm, err := next(cm, req)
+	resp, cs, err := next(cs, req)
 	if resp != nil {
 		resp.Header.Add("Out-Order", f.key)
 	}
-	return resp, cm, err
+	return resp, cs, err
 }

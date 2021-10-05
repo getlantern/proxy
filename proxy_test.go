@@ -102,15 +102,15 @@ func TestRequestAware(t *testing.T) {
 
 	waitforserver.WaitForServer("tcp", addr, 5*time.Second)
 
-	cm := new(filters.ConnectionMetadata)
+	cs := new(filters.ConnectionState)
 	var tr idleClosingTransport = &http.Transport{
-		DialContext: p.requestAwareDial(cm),
+		DialContext: p.requestAwareDial(cs),
 	}
 
 	next := p.nextNonCONNECT(tr)
 	req, err := http.NewRequest("GET", "http://127.0.0.1:3000", nil)
 
-	_, _, err = next(cm, req)
+	_, _, err = next(cs, req)
 
 	assert.NoError(t, err)
 	assert.Equal(t, "true", serverRequest.Header.Get("x-aware"))
@@ -119,7 +119,7 @@ func TestRequestAware(t *testing.T) {
 func TestDialFailureHTTP(t *testing.T) {
 	errorText := "I don't want to dial"
 	d := mockconn.FailingDialer(errors.New(errorText))
-	onError := func(cm *filters.ConnectionMetadata, req *http.Request, read bool, err error) *http.Response {
+	onError := func(cs *filters.ConnectionState, req *http.Request, read bool, err error) *http.Response {
 		return &http.Response{
 			StatusCode: http.StatusBadGateway,
 			Body:       ioutil.NopCloser(bytes.NewReader([]byte(err.Error()))),
@@ -292,7 +292,7 @@ func TestDialFailureCONNECTDontWaitForUpstream(t *testing.T) {
 
 func TestPanicRecover(t *testing.T) {
 	p := newProxy(&Opts{
-		Filter: filters.FilterFunc(func(cm *filters.ConnectionMetadata, req *http.Request, next filters.Next) (*http.Response, *filters.ConnectionMetadata, error) {
+		Filter: filters.FilterFunc(func(cs *filters.ConnectionState, req *http.Request, next filters.Next) (*http.Response, *filters.ConnectionState, error) {
 			panic(errors.New("I'm panicking!"))
 		}),
 	})
@@ -324,10 +324,10 @@ func doTestConnect(t *testing.T, okWaitsForUpstream bool) {
 			mx.Unlock()
 			return d.Dial(net, addr)
 		},
-		Filter: filters.FilterFunc(func(cm *filters.ConnectionMetadata, req *http.Request, next filters.Next) (*http.Response, *filters.ConnectionMetadata, error) {
+		Filter: filters.FilterFunc(func(cs *filters.ConnectionState, req *http.Request, next filters.Next) (*http.Response, *filters.ConnectionState, error) {
 			req.Host = req.Host + "80"
 			req.URL.Host = req.Host
-			return next(cm, req)
+			return next(cs, req)
 		}),
 	})
 	received := &bytes.Buffer{}
@@ -345,8 +345,8 @@ func doTestConnect(t *testing.T, okWaitsForUpstream bool) {
 
 func TestShortCircuitHTTP(t *testing.T) {
 	p := newProxy(&Opts{
-		Filter: filters.FilterFunc(func(cm *filters.ConnectionMetadata, req *http.Request, next filters.Next) (*http.Response, *filters.ConnectionMetadata, error) {
-			return filters.ShortCircuit(cm, req, &http.Response{
+		Filter: filters.FilterFunc(func(cs *filters.ConnectionState, req *http.Request, next filters.Next) (*http.Response, *filters.ConnectionState, error) {
+			return filters.ShortCircuit(cs, req, &http.Response{
 				Header:     make(http.Header),
 				StatusCode: http.StatusForbidden,
 				Close:      true,
@@ -366,8 +366,8 @@ func TestShortCircuitHTTP(t *testing.T) {
 
 func TestShortCircuitCONNECT(t *testing.T) {
 	p := newProxy(&Opts{
-		Filter: filters.FilterFunc(func(cm *filters.ConnectionMetadata, req *http.Request, next filters.Next) (*http.Response, *filters.ConnectionMetadata, error) {
-			return filters.ShortCircuit(cm, req, &http.Response{
+		Filter: filters.FilterFunc(func(cs *filters.ConnectionState, req *http.Request, next filters.Next) (*http.Response, *filters.ConnectionState, error) {
+			return filters.ShortCircuit(cs, req, &http.Response{
 				Header:     make(http.Header),
 				StatusCode: http.StatusForbidden,
 			})
@@ -550,26 +550,26 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 
 	first := true
 	requestNumber := int64(0)
-	filter := filters.FilterFunc(func(cm *filters.ConnectionMetadata, req *http.Request, next filters.Next) (*http.Response, *filters.ConnectionMetadata, error) {
-		atomic.StoreInt64(&requestNumber, int64(cm.RequestNumber()))
+	filter := filters.FilterFunc(func(cs *filters.ConnectionState, req *http.Request, next filters.Next) (*http.Response, *filters.ConnectionState, error) {
+		atomic.StoreInt64(&requestNumber, int64(cs.RequestNumber()))
 		if req.RemoteAddr == "" {
 			t.Fatal("Request missing RemoteAddr!")
 		}
 		if discardFirstRequest && first {
 			first = false
-			return filters.Discard(cm, req)
+			return filters.Discard(cs, req)
 		}
 		req.Header.Set(testReqHeader, testHeaderValue)
-		resp, nextCM, nextErr := next(cm, req)
+		resp, nextCM, nextErr := next(cs, req)
 		if resp != nil {
 			resp.Header.Set(testRespHeader, testHeaderValue)
 		}
 
 		isConnect := req.Method == http.MethodConnect
 		if !isConnect && shouldMITM {
-			assert.True(t, cm.IsMITMing())
+			assert.True(t, cs.IsMITMing())
 		} else {
-			assert.False(t, cm.IsMITMing())
+			assert.False(t, cs.IsMITMing())
 		}
 
 		return resp, nextCM, nextErr

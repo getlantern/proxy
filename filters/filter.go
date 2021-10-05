@@ -9,23 +9,23 @@ import (
 
 // Filter supports intercepting and modifying http requests and responses
 type Filter interface {
-	Apply(md *ConnectionMetadata, req *http.Request, next Next) (*http.Response, *ConnectionMetadata, error)
+	Apply(cs *ConnectionState, req *http.Request, next Next) (*http.Response, *ConnectionState, error)
 }
 
 // FilterFunc adapts a function to a Filter
-type FilterFunc func(cm *ConnectionMetadata, req *http.Request, next Next) (*http.Response, *ConnectionMetadata, error)
+type FilterFunc func(cs *ConnectionState, req *http.Request, next Next) (*http.Response, *ConnectionState, error)
 
 // Apply implements the interface Filter
-func (ff FilterFunc) Apply(cm *ConnectionMetadata, req *http.Request, next Next) (*http.Response, *ConnectionMetadata, error) {
-	return ff(cm, req, next)
+func (ff FilterFunc) Apply(cs *ConnectionState, req *http.Request, next Next) (*http.Response, *ConnectionState, error) {
+	return ff(cs, req, next)
 }
 
 // Next is a function that's used to indicate that request processing should
 // continue as usual.
-type Next func(cm *ConnectionMetadata, req *http.Request) (*http.Response, *ConnectionMetadata, error)
+type Next func(cs *ConnectionState, req *http.Request) (*http.Response, *ConnectionState, error)
 
 // ShortCircuit is a convenience method for creating short-circuiting responses.
-func ShortCircuit(cm *ConnectionMetadata, req *http.Request, resp *http.Response) (*http.Response, *ConnectionMetadata, error) {
+func ShortCircuit(cs *ConnectionState, req *http.Request, resp *http.Response) (*http.Response, *ConnectionState, error) {
 	if resp.Header == nil {
 		resp.Header = make(http.Header)
 	}
@@ -36,12 +36,12 @@ func ShortCircuit(cm *ConnectionMetadata, req *http.Request, resp *http.Response
 		resp.ContentLength = -1
 		resp.TransferEncoding = []string{"chunked"}
 	}
-	return resp, cm, nil
+	return resp, cs, nil
 }
 
 // Fail fails processing, returning a response with the given status code and
 // description populated from error.
-func Fail(cm *ConnectionMetadata, req *http.Request, statusCode int, err error) (*http.Response, *ConnectionMetadata, error) {
+func Fail(cs *ConnectionState, req *http.Request, statusCode int, err error) (*http.Response, *ConnectionState, error) {
 	errString := err.Error()
 	resp := &http.Response{
 		Proto:         req.Proto,
@@ -53,17 +53,17 @@ func Fail(cm *ConnectionMetadata, req *http.Request, statusCode int, err error) 
 		ContentLength: int64(len(errString)),
 		Close:         true,
 	}
-	return resp, cm, err
+	return resp, cs, err
 }
 
 // Discard discards the given request. Make sure to use this when discarding
 // requests in order to make sure that the request body is read.
-func Discard(cm *ConnectionMetadata, req *http.Request) (*http.Response, *ConnectionMetadata, error) {
+func Discard(cs *ConnectionState, req *http.Request) (*http.Response, *ConnectionState, error) {
 	if req.Body != nil {
 		io.Copy(ioutil.Discard, req.Body)
 		req.Body.Close()
 	}
-	return nil, cm, nil
+	return nil, cs, nil
 }
 
 // Chain is a chain of Filters that acts as an http.Handler.
@@ -89,16 +89,16 @@ func (c Chain) Prepend(pre Filter) Chain {
 }
 
 // Apply implements the interface Filter
-func (c Chain) Apply(cm *ConnectionMetadata, req *http.Request, next Next) (*http.Response, *ConnectionMetadata, error) {
-	return c.apply(cm, req, next, 0)
+func (c Chain) Apply(cs *ConnectionState, req *http.Request, next Next) (*http.Response, *ConnectionState, error) {
+	return c.apply(cs, req, next, 0)
 }
 
-func (c Chain) apply(cm *ConnectionMetadata, req *http.Request, next Next, idx int) (*http.Response, *ConnectionMetadata, error) {
+func (c Chain) apply(cs *ConnectionState, req *http.Request, next Next, idx int) (*http.Response, *ConnectionState, error) {
 	if idx == len(c) {
-		return next(cm, req)
+		return next(cs, req)
 	}
-	return c[idx].Apply(cm, req,
-		func(cm *ConnectionMetadata, req *http.Request) (*http.Response, *ConnectionMetadata, error) {
-			return c.apply(cm, req, next, idx+1)
+	return c[idx].Apply(cs, req,
+		func(cs *ConnectionState, req *http.Request) (*http.Response, *ConnectionState, error) {
+			return c.apply(cs, req, next, idx+1)
 		})
 }

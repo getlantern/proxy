@@ -9,17 +9,17 @@ import (
 // given Filter.
 func Intercept(handler http.Handler, filter Filter) http.Handler {
 	return http.HandlerFunc(func(resp http.ResponseWriter, req *http.Request) {
-		var cm *ConnectionMetadata
+		var cs *ConnectionState
 		if hj, ok := resp.(http.Hijacker); ok {
-			cm.downstream, _, _ = hj.Hijack()
+			cs.downstream, _, _ = hj.Hijack()
 		}
 
-		next := func(cm *ConnectionMetadata, filteredReq *http.Request) (*http.Response, *ConnectionMetadata, error) {
+		next := func(cs *ConnectionState, filteredReq *http.Request) (*http.Response, *ConnectionState, error) {
 			handler.ServeHTTP(resp, filteredReq)
 			return nil, nil, nil
 		}
 
-		filteredResp, _, _ := filter.Apply(cm, req, next)
+		filteredResp, _, _ := filter.Apply(cs, req, next)
 		if filteredResp != nil {
 			for key, value := range filteredResp.Header {
 				resp.Header()[key] = value

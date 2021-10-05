@@ -61,11 +61,11 @@ type connectInterceptor struct {
 }
 
 func (proxy *proxy) nextCONNECT(downstream net.Conn, respondOK bool) filters.Next {
-	return func(cm *filters.ConnectionMetadata, modifiedReq *http.Request) (*http.Response, *filters.ConnectionMetadata, error) {
+	return func(cs *filters.ConnectionState, modifiedReq *http.Request) (*http.Response, *filters.ConnectionState, error) {
 		var resp *http.Response
 		upstreamAddr := modifiedReq.URL.Host
-		nextCM := cm.Clone()
-		nextCM.SetUpstreamAddr(upstreamAddr)
+		nextCS := cs.Clone()
+		nextCS.SetUpstreamAddr(upstreamAddr)
 
 		if !proxy.OKWaitsForUpstream {
 			// We preemptively respond with an OK on the client. Some user agents like
@@ -79,14 +79,14 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn, respondOK bool) filters.Nex
 			// than the proxy and continue to consider the proxy good. See the extensive
 			// discussion here: https://github.com/getlantern/lantern/issues/5514.
 			if respondOK {
-				resp, nextCM, _ = filters.ShortCircuit(nextCM, modifiedReq, &http.Response{
+				resp, nextCS, _ = filters.ShortCircuit(nextCS, modifiedReq, &http.Response{
 					StatusCode: http.StatusOK,
 				})
 			}
 			if proxy.OKSendsServerTiming {
 				addDialUpstreamHeader(resp, 0)
 			}
-			return resp, nextCM, nil
+			return resp, nextCS, nil
 		}
 
 		var start time.Time
@@ -103,9 +103,9 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn, respondOK bool) filters.Nex
 		cancelDial()
 		if err != nil {
 			if proxy.OKWaitsForUpstream {
-				return badGateway(cm, modifiedReq, err)
+				return badGateway(cs, modifiedReq, err)
 			}
-			return nil, cm, err
+			return nil, cs, err
 		}
 
 		// In this case, waited to successfully dial upstream before responding
@@ -115,7 +115,7 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn, respondOK bool) filters.Nex
 		// for example, if some proxy servers reside in jurisdictions where an
 		// origin site is blocked but other proxy servers don't.
 		if respondOK {
-			resp, nextCM, _ = filters.ShortCircuit(nextCM, modifiedReq, &http.Response{
+			resp, nextCS, _ = filters.ShortCircuit(nextCS, modifiedReq, &http.Response{
 				StatusCode: http.StatusOK,
 			})
 		}
@@ -123,8 +123,8 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn, respondOK bool) filters.Nex
 			addDialUpstreamHeader(resp, time.Since(start))
 		}
 
-		nextCM.SetUpstream(upstream)
-		return resp, nextCM, nil
+		nextCS.SetUpstream(upstream)
+		return resp, nextCS, nil
 	}
 }
 
@@ -164,7 +164,7 @@ func (proxy *proxy) Connect(in io.Reader, conn net.Conn, origin string) error {
 // TODO: why are upstreamAddr, upstream, and downstream passed in separately here? They should have
 // been on the context, right (and therefore now md)?
 func (proxy *proxy) proceedWithConnect(
-	md *filters.ConnectionMetadata, req *http.Request,
+	cs *filters.ConnectionState, req *http.Request,
 	upstreamAddr string, upstream net.Conn, downstream net.Conn, respondOK bool) error {
 
 	if upstream == nil {
@@ -208,8 +208,8 @@ func (proxy *proxy) proceedWithConnect(
 				fullDownstream := io.MultiReader(rr, downstream)
 				// Remove upstream info from context so that handle doesn't try to
 				// process this as a CONNECT
-				md.ClearUpstream()
-				md.SetMITMing(true)
+				cs.ClearUpstream()
+				cs.SetMITMing(true)
 				return proxy.handle(fullDownstream, downstream, upstream, respondOK)
 			}
 
@@ -242,9 +242,9 @@ func (proxy *proxy) proceedWithConnect(
 	return nil
 }
 
-func badGateway(cm *filters.ConnectionMetadata, req *http.Request, err error) (*http.Response, *filters.ConnectionMetadata, error) {
+func badGateway(cs *filters.ConnectionState, req *http.Request, err error) (*http.Response, *filters.ConnectionState, error) {
 	log.Debugf("Responding BadGateway: %v", err)
-	return filters.Fail(cm, req, http.StatusBadGateway, err)
+	return filters.Fail(cs, req, http.StatusBadGateway, err)
 }
 
 type defaultBufferSource struct{ sync.Pool }
