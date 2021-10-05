@@ -80,11 +80,8 @@ func (proxy *proxy) handle(downstreamIn io.Reader, downstream net.Conn, upstream
 		}
 	}()
 
-	downstreamBuffered := bufio.NewReader(downstreamIn)
-	// TODO: the previous withAwareConn call just sets an empty map... is that necessary?
-	// fctx := filters.WrapContext(withAwareConn(ctx), downstream)
-
 	// Read initial request
+	downstreamBuffered := bufio.NewReader(downstreamIn)
 	req, err := http.ReadRequest(downstreamBuffered)
 	if err != nil {
 		if isUnexpected(err) {
@@ -173,8 +170,6 @@ func (proxy *proxy) nextNonCONNECT(tr idleClosingTransport) func(cs *filters.Con
 	}
 }
 
-// TODO: why are upstreamAddr, upstream, and downstream passed in separately here? They should have
-// been on the context, right (and therefore now md)?
 func (proxy *proxy) processRequests(cs *filters.ConnectionState,
 	remoteAddr string, req *http.Request, downstream net.Conn, downstreamBuffered *bufio.Reader,
 	next filters.Next, respondOK bool) error {

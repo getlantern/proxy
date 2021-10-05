@@ -40,7 +40,7 @@ func NewConnectionState(initialReq *http.Request, upstream, downstream net.Conn)
 		cs.originalHost = initialReq.Host
 	}
 	if upstream != nil {
-		cs.upstreamAddr = upstream.RemoteAddr().String() // TODO: check
+		cs.upstreamAddr = upstream.RemoteAddr().String()
 	}
 	return cs
 }
@@ -112,7 +112,7 @@ func (cs *ConnectionState) IncrementRequestNumber() {
 // SetUpstream sets the upstream connection.
 func (cs *ConnectionState) SetUpstream(upstream net.Conn) {
 	cs.upstream = upstream
-	cs.upstreamAddr = upstream.RemoteAddr().String() // TODO: should we do this?
+	cs.upstreamAddr = upstream.RemoteAddr().String()
 }
 
 // SetUpstreamAddr sets the upstream address.

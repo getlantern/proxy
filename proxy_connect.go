@@ -97,7 +97,6 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn, respondOK bool) filters.Nex
 		// Note - for CONNECT requests, we use the Host from the request URL, not the
 		// Host header. See discussion here:
 		// https://ask.wireshark.org/questions/22988/http-host-header-with-and-without-port-number
-		// TODO: double-check that the context could not have had an existing deadline already
 		dialCtx, cancelDial := addDialDeadlineIfNecessary(context.Background(), modifiedReq)
 		upstream, err := proxy.Dial(dialCtx, true, "tcp", upstreamAddr)
 		cancelDial()
@@ -161,8 +160,6 @@ func (proxy *proxy) Connect(in io.Reader, conn net.Conn, origin string) error {
 	return proxy.handle(pin, conn, nil, false)
 }
 
-// TODO: why are upstreamAddr, upstream, and downstream passed in separately here? They should have
-// been on the context, right (and therefore now md)?
 func (proxy *proxy) proceedWithConnect(
 	cs *filters.ConnectionState, req *http.Request,
 	upstreamAddr string, upstream net.Conn, downstream net.Conn, respondOK bool) error {
