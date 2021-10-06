@@ -45,6 +45,11 @@ func NewConnectionState(initialReq *http.Request, upstream, downstream net.Conn)
 	return cs
 }
 
+// Downstream returns the downstream connection.
+func (cs *ConnectionState) Downstream() net.Conn {
+	return cs.downstream
+}
+
 // Upstream returns the upstream connection.
 func (cs *ConnectionState) Upstream() net.Conn {
 	return cs.upstream
