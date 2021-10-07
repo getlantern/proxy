@@ -19,25 +19,29 @@ func TestContext(t *testing.T) {
 }
 
 func BenchmarkRegularContext(b *testing.B) {
-	ctx := context.Background()
+	rootKey := "root"
 	key := "key"
+	ctx := context.WithValue(context.Background(), rootKey, "r")
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		ctx = context.WithValue(ctx, key, i)
 		for j := 0; j < 10; j++ {
 			ctx.Value(key)
+			ctx.Value(rootKey)
 		}
 	}
 }
 
 func BenchmarkAdaptedContext(b *testing.B) {
-	ctx := AdaptContext(context.Background())
+	rootKey := "root"
 	key := "key"
+	ctx := AdaptContext(context.WithValue(context.Background(), rootKey, "r"))
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		ctx = ctx.WithValue(key, i)
 		for j := 0; j < 10; j++ {
 			ctx.Value(key)
+			ctx.Value(rootKey)
 		}
 	}
 }
