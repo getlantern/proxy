@@ -8,6 +8,10 @@ import (
 
 type contextKey string
 
+type nilType struct{}
+
+var nilValue = &nilType{}
+
 const (
 	ctxKeyDownstream    = contextKey("downstream")
 	ctxKeyRequestNumber = contextKey("requestNumber")
@@ -46,21 +50,25 @@ type Context interface {
 	// IsMITMing indicates whether or the proxy is MITMing the current connection.
 	IsMITMing() bool
 
-	// WithValue mimics the method on context.Context
+	// WithValue mimics the method on context except it modifies the value in place
 	WithValue(key, val interface{}) Context
 }
 
 // WrapContext wraps the given context.Context into a Context containing the
 // given downstream net.Conn.
 func WrapContext(ctx context.Context, downstream net.Conn) Context {
-	return (&ctext{ctx}).
+	return AdaptContext(ctx).
 		WithValue(ctxKeyRequestNumber, 1).
 		WithValue(ctxKeyDownstream, func() net.Conn { return downstream })
 }
 
 // AdaptContext adapts a context.Context to the Context interface.
 func AdaptContext(ctx context.Context) Context {
-	return &ctext{ctx}
+	if ctx.Value(longLivedValuesKey) != nil {
+		return &ctext{ctx}
+	} else {
+		return &ctext{context.WithValue(ctx, longLivedValuesKey, make(map[interface{}]interface{}))}
+	}
 }
 
 // BackgroundContext creates a background Context without an associated
@@ -114,6 +122,32 @@ func (ctx *ctext) IsMITMing() bool {
 	return mitming != nil && mitming.(bool)
 }
 
-func (ctx *ctext) WithValue(key, val interface{}) Context {
-	return &ctext{context.WithValue(ctx, key, val)}
+func (ctx *ctext) Value(key interface{}) interface{} {
+	values := ctx.getLongLivedValues()
+	// try to get key/value from our map
+	value, found := values[key]
+	if !found {
+		// no value found in map, look in wrapped Context
+		value = ctx.Context.Value(key)
+		if value == nil {
+			value = nilValue
+		}
+		// remember ctxValue in map to avoid looking it up in wrapped Context again
+		values[key] = value
+	}
+	if value == nilValue {
+		return nil
+	}
+	return value
 }
+
+func (ctx *ctext) WithValue(key, val interface{}) Context {
+	ctx.getLongLivedValues()[key] = val
+	return ctx
+}
+
+func (ctx *ctext) getLongLivedValues() map[interface{}]interface{} {
+	return ctx.Context.Value(longLivedValuesKey).(map[interface{}]interface{})
+}
+
+var longLivedValuesKey = "_filtersLongLivedValues"
