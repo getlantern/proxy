@@ -79,9 +79,7 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn, respondOK bool) filters.Nex
 			// than the proxy and continue to consider the proxy good. See the extensive
 			// discussion here: https://github.com/getlantern/lantern/issues/5514.
 			if respondOK {
-				resp, nextCS, _ = filters.ShortCircuit(nextCS, modifiedReq, &http.Response{
-					StatusCode: http.StatusOK,
-				})
+				resp, nextCS = doRespondOK(nextCS, modifiedReq)
 			}
 			if proxy.OKSendsServerTiming {
 				addDialUpstreamHeader(resp, 0)
@@ -114,9 +112,7 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn, respondOK bool) filters.Nex
 		// for example, if some proxy servers reside in jurisdictions where an
 		// origin site is blocked but other proxy servers don't.
 		if respondOK {
-			resp, nextCS, _ = filters.ShortCircuit(nextCS, modifiedReq, &http.Response{
-				StatusCode: http.StatusOK,
-			})
+			resp, nextCS = doRespondOK(nextCS, modifiedReq)
 		}
 		if proxy.OKSendsServerTiming {
 			addDialUpstreamHeader(resp, time.Since(start))
@@ -271,4 +267,12 @@ func (proxy *proxy) defaultShouldMITM(req *http.Request, upstreamAddr string) bo
 		}
 	}
 	return false
+}
+
+func doRespondOK(cs *filters.ConnectionState, req *http.Request) (*http.Response, *filters.ConnectionState) {
+	// filter.ShortCircuit never returns an error, so it's okay to ignore.
+	resp, nextCS, _ := filters.ShortCircuit(cs, req, &http.Response{
+		StatusCode: http.StatusOK,
+	})
+	return resp, nextCS
 }
