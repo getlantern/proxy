@@ -2,6 +2,7 @@ package filters
 
 import (
 	"io"
+	"net"
 	"net/http"
 )
 
@@ -10,8 +11,12 @@ import (
 func Intercept(handler http.Handler, filter Filter) http.Handler {
 	return http.HandlerFunc(func(resp http.ResponseWriter, req *http.Request) {
 		var cs *ConnectionState
-		if hj, ok := resp.(http.Hijacker); ok {
-			cs.downstream, _, _ = hj.Hijack()
+		cs.downstream = func() net.Conn {
+			if hj, ok := resp.(http.Hijacker); ok {
+				downstream, _, _ := hj.Hijack()
+				return downstream
+			}
+			return nil
 		}
 
 		next := func(cs *ConnectionState, filteredReq *http.Request) (*http.Response, *ConnectionState, error) {

@@ -13,8 +13,12 @@ type ConnectionState struct {
 	originalURLHost   string
 	originalHost      string
 
-	upstream, downstream net.Conn
-	upstreamAddr         string
+	upstream     net.Conn
+	upstreamAddr string
+
+	// It is sometimes necessary to delay retrieval of the downstream connection. The function
+	// itself is never nil, but the returned net.Conn may be.
+	downstream func() net.Conn
 
 	requestNumber int
 
@@ -30,7 +34,7 @@ type ConnectionState struct {
 func NewConnectionState(initialReq *http.Request, upstream, downstream net.Conn) *ConnectionState {
 	cs := &ConnectionState{
 		upstream:      upstream,
-		downstream:    downstream,
+		downstream:    func() net.Conn { return downstream },
 		requestNumber: 1,
 		mitming:       false,
 	}
@@ -47,7 +51,7 @@ func NewConnectionState(initialReq *http.Request, upstream, downstream net.Conn)
 
 // Downstream returns the downstream connection.
 func (cs *ConnectionState) Downstream() net.Conn {
-	return cs.downstream
+	return cs.downstream()
 }
 
 // Upstream returns the upstream connection.
@@ -101,7 +105,7 @@ func (cs *ConnectionState) RequestAwareUpstream() net.Conn {
 func (cs *ConnectionState) Clone() *ConnectionState {
 	return &ConnectionState{
 		cs.originalURLScheme, cs.originalURLHost, cs.originalHost,
-		cs.upstream, cs.downstream, cs.upstreamAddr,
+		cs.upstream, cs.upstreamAddr, cs.downstream,
 		cs.requestNumber,
 		cs.mitming,
 		cs.requestAwareRequest,
