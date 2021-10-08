@@ -17,6 +17,8 @@ import (
 )
 
 const (
+	defaultDialTimeout = 30 * time.Second
+
 	serverTimingHeader = "Server-Timing"
 
 	// MetricDialUpstream is the Server-Timing metric to record milliseconds to
@@ -40,11 +42,13 @@ type DialFunc func(ctx context.Context, isCONNECT bool, network, addr string) (c
 type Proxy interface {
 	// Handle handles a single connection, with in specified separately in case
 	// there's a buffered reader or something of that sort in use.
-	Handle(in io.Reader, conn net.Conn) error
+	// dialCtx applies only when dialing upstream.
+	Handle(dialCtx context.Context, in io.Reader, conn net.Conn) error
 
 	// Connect opens a CONNECT tunnel to the origin without requiring a CONNECT
 	// request to first be sent on conn. It will not reply with CONNECT OK.
-	Connect(in io.Reader, conn net.Conn, origin string) error
+	// dialCtx applies only when dialing upstream.
+	Connect(dialCtx context.Context, in io.Reader, conn net.Conn, origin string) error
 
 	// Serve runs a server on the given Listener
 	Serve(l net.Listener) error
@@ -122,12 +126,9 @@ type proxy struct {
 func New(opts *Opts) (newProxy Proxy, mitmErr error) {
 	if opts.Dial == nil {
 		opts.Dial = func(ctx context.Context, isCONNECT bool, network, addr string) (conn net.Conn, err error) {
-			timeout := 30 * time.Second
-			deadline, hasDeadline := ctx.Deadline()
-			if hasDeadline {
-				timeout = deadline.Sub(time.Now())
-			}
-			return net.DialTimeout(network, addr, timeout)
+			ctx, cancel := context.WithTimeout(ctx, defaultDialTimeout)
+			defer cancel()
+			return (&net.Dialer{}).DialContext(ctx, network, addr)
 		}
 	}
 	p := &proxy{

@@ -332,7 +332,7 @@ func doTestConnect(t *testing.T, okWaitsForUpstream bool) {
 	})
 	received := &bytes.Buffer{}
 	conn := mockconn.New(received, strings.NewReader(""))
-	err := p.Connect(conn, conn, originalOrigin)
+	err := p.Connect(context.Background(), conn, conn, originalOrigin)
 	if !assert.NoError(t, err) {
 		return
 	}
@@ -453,7 +453,7 @@ func TestHTTPDownstreamError(t *testing.T) {
 				return
 			}
 			conn.Close()
-			go p.Handle(conn, conn)
+			go p.Handle(context.Background(), conn, conn)
 		}
 	}()
 
@@ -738,7 +738,7 @@ func roundTrip(p Proxy, req *http.Request, readResponse bool) (resp *http.Respon
 	}
 	received := &bytes.Buffer{}
 	conn := mockconn.New(received, toSend)
-	handleErr = p.Handle(conn, conn)
+	handleErr = p.Handle(context.Background(), conn, conn)
 	if readResponse {
 		resp, roundTripErr = http.ReadResponse(bufio.NewReader(bytes.NewReader(received.Bytes())), req)
 	}
@@ -855,7 +855,7 @@ func TestPipeliningWithIdleTimingServer(t *testing.T) {
 				return
 			}
 			t.Log("Proxy Accepted")
-			go p.Handle(conn, conn)
+			go p.Handle(context.Background(), conn, conn)
 		}
 	}()
 

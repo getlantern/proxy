@@ -28,8 +28,8 @@ func (opts *Opts) applyHTTPDefaults() {
 }
 
 // Handle implements the interface Proxy
-func (proxy *proxy) Handle(downstreamIn io.Reader, downstream net.Conn) (err error) {
-	return proxy.handle(downstreamIn, downstream, nil, true)
+func (proxy *proxy) Handle(dialCtx context.Context, downstreamIn io.Reader, downstream net.Conn) (err error) {
+	return proxy.handle(dialCtx, downstreamIn, downstream, nil, true)
 }
 
 func safeClose(conn net.Conn) {
@@ -66,7 +66,7 @@ func (proxy *proxy) logInitialReadError(downstream net.Conn, err error) error {
 	return log.Errorf("Initial ReadRequest: %v from %v", err, r)
 }
 
-func (proxy *proxy) handle(downstreamIn io.Reader, downstream net.Conn, upstream net.Conn, respondOK bool) (err error) {
+func (proxy *proxy) handle(dialCtx context.Context, downstreamIn io.Reader, downstream net.Conn, upstream net.Conn, respondOK bool) (err error) {
 	defer func() {
 		p := recover()
 		if p != nil {
@@ -103,14 +103,14 @@ func (proxy *proxy) handle(downstreamIn io.Reader, downstream net.Conn, upstream
 
 	var next filters.Next
 	if req.Method == http.MethodConnect {
-		next = proxy.nextCONNECT(downstream, respondOK)
+		next = proxy.nextCONNECT(dialCtx, downstream, respondOK)
 	} else {
 		var tr idleClosingTransport
 		if upstream != nil {
 			cs.SetRequestAwareUpstream(upstream)
 			tr = &addressLoggingTransport{
 				Transport: &http.Transport{
-					DialContext: func(ctx context.Context, net, addr string) (net.Conn, error) {
+					DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
 						// always use the supplied upstream connection, but don't allow it to
 						// be closed by the transport
 						return &noCloseConn{upstream}, nil
@@ -136,7 +136,8 @@ func (proxy *proxy) handle(downstreamIn io.Reader, downstream net.Conn, upstream
 		next = proxy.nextNonCONNECT(tr)
 	}
 
-	return proxy.processRequests(cs, req.RemoteAddr, req, downstream, downstreamBuffered, next, respondOK)
+	return proxy.processRequests(
+		dialCtx, cs, req.RemoteAddr, req, downstream, downstreamBuffered, next, respondOK)
 }
 
 func (proxy *proxy) requestAwareDial(cs *filters.ConnectionState) func(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -170,7 +171,7 @@ func (proxy *proxy) nextNonCONNECT(tr idleClosingTransport) func(cs *filters.Con
 	}
 }
 
-func (proxy *proxy) processRequests(cs *filters.ConnectionState,
+func (proxy *proxy) processRequests(dialCtx context.Context, cs *filters.ConnectionState,
 	remoteAddr string, req *http.Request, downstream net.Conn, downstreamBuffered *bufio.Reader,
 	next filters.Next, respondOK bool) error {
 
@@ -225,7 +226,8 @@ func (proxy *proxy) processRequests(cs *filters.ConnectionState,
 		}
 
 		if isConnect {
-			return proxy.proceedWithConnect(cs, req, upstreamAddr, upstream, downstream, respondOK)
+			return proxy.proceedWithConnect(
+				dialCtx, cs, req, upstreamAddr, upstream, downstream, respondOK)
 		}
 
 		if req.Close {

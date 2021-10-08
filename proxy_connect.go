@@ -60,7 +60,7 @@ type connectInterceptor struct {
 	okWaitsForUpstream bool
 }
 
-func (proxy *proxy) nextCONNECT(downstream net.Conn, respondOK bool) filters.Next {
+func (proxy *proxy) nextCONNECT(dialCtx context.Context, downstream net.Conn, respondOK bool) filters.Next {
 	return func(cs *filters.ConnectionState, modifiedReq *http.Request) (*http.Response, *filters.ConnectionState, error) {
 		var resp *http.Response
 		upstreamAddr := modifiedReq.URL.Host
@@ -95,7 +95,7 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn, respondOK bool) filters.Nex
 		// Note - for CONNECT requests, we use the Host from the request URL, not the
 		// Host header. See discussion here:
 		// https://ask.wireshark.org/questions/22988/http-host-header-with-and-without-port-number
-		dialCtx, cancelDial := addDialDeadlineIfNecessary(context.Background(), modifiedReq)
+		dialCtx, cancelDial := addDialDeadlineIfNecessary(dialCtx, modifiedReq)
 		upstream, err := proxy.Dial(dialCtx, true, "tcp", upstreamAddr)
 		cancelDial()
 		if err != nil {
@@ -151,18 +151,18 @@ func addDialDeadlineIfNecessary(ctx context.Context, req *http.Request) (context
 func noopCancel() {
 }
 
-func (proxy *proxy) Connect(in io.Reader, conn net.Conn, origin string) error {
+func (proxy *proxy) Connect(dialCtx context.Context, in io.Reader, conn net.Conn, origin string) error {
 	pin := io.MultiReader(strings.NewReader(fmt.Sprintf(connectRequest, origin, origin)), in)
-	return proxy.handle(pin, conn, nil, false)
+	return proxy.handle(dialCtx, pin, conn, nil, false)
 }
 
 func (proxy *proxy) proceedWithConnect(
-	cs *filters.ConnectionState, req *http.Request,
+	dialCtx context.Context, cs *filters.ConnectionState, req *http.Request,
 	upstreamAddr string, upstream net.Conn, downstream net.Conn, respondOK bool) error {
 
 	if upstream == nil {
 		var dialErr error
-		upstream, dialErr = proxy.Dial(context.Background(), true, "tcp", upstreamAddr)
+		upstream, dialErr = proxy.Dial(dialCtx, true, "tcp", upstreamAddr)
 		if dialErr != nil {
 			return dialErr
 		}
@@ -203,7 +203,7 @@ func (proxy *proxy) proceedWithConnect(
 				// process this as a CONNECT
 				cs.ClearUpstream()
 				cs.SetMITMing(true)
-				return proxy.handle(fullDownstream, downstream, upstream, respondOK)
+				return proxy.handle(dialCtx, fullDownstream, downstream, upstream, respondOK)
 			}
 
 			// We couldn't read the first HTTP Request, fall back to piping data
