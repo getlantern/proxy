@@ -13,10 +13,12 @@ import (
 	"github.com/getlantern/errors"
 	"github.com/getlantern/golog"
 	"github.com/getlantern/mitm"
-	"github.com/getlantern/proxy/filters"
+	"github.com/getlantern/proxy/v2/filters"
 )
 
 const (
+	defaultDialTimeout = 30 * time.Second
+
 	serverTimingHeader = "Server-Timing"
 
 	// MetricDialUpstream is the Server-Timing metric to record milliseconds to
@@ -40,11 +42,13 @@ type DialFunc func(ctx context.Context, isCONNECT bool, network, addr string) (c
 type Proxy interface {
 	// Handle handles a single connection, with in specified separately in case
 	// there's a buffered reader or something of that sort in use.
-	Handle(ctx context.Context, in io.Reader, conn net.Conn) error
+	// dialCtx applies only when dialing upstream.
+	Handle(dialCtx context.Context, in io.Reader, conn net.Conn) error
 
 	// Connect opens a CONNECT tunnel to the origin without requiring a CONNECT
 	// request to first be sent on conn. It will not reply with CONNECT OK.
-	Connect(ctx context.Context, in io.Reader, conn net.Conn, origin string) error
+	// dialCtx applies only when dialing upstream.
+	Connect(dialCtx context.Context, in io.Reader, conn net.Conn, origin string) error
 
 	// Serve runs a server on the given Listener
 	Serve(l net.Listener) error
@@ -84,7 +88,7 @@ type Opts struct {
 	// in the event that there's an error round-tripping upstream. If the function
 	// returns no response, nothing is written to the client. Read indicates
 	// whether the error occurred on reading a request or not. (HTTP only)
-	OnError func(ctx filters.Context, req *http.Request, read bool, err error) *http.Response
+	OnError func(cs *filters.ConnectionState, req *http.Request, read bool, err error) *http.Response
 
 	// OKWaitsForUpstream specifies whether or not to wait on dialing upstream
 	// before responding OK to a CONNECT request (CONNECT only).
@@ -122,12 +126,9 @@ type proxy struct {
 func New(opts *Opts) (newProxy Proxy, mitmErr error) {
 	if opts.Dial == nil {
 		opts.Dial = func(ctx context.Context, isCONNECT bool, network, addr string) (conn net.Conn, err error) {
-			timeout := 30 * time.Second
-			deadline, hasDeadline := ctx.Deadline()
-			if hasDeadline {
-				timeout = deadline.Sub(time.Now())
-			}
-			return net.DialTimeout(network, addr, timeout)
+			ctx, cancel := context.WithTimeout(ctx, defaultDialTimeout)
+			defer cancel()
+			return (&net.Dialer{}).DialContext(ctx, network, addr)
 		}
 	}
 	p := &proxy{
@@ -165,12 +166,12 @@ func (p *proxy) ApplyMITMOptions(MITMOpts *mitm.Opts) (mitmErr error) {
 // OnFirstOnly returns a filter that applies the given filter only on the first
 // request on a given connection.
 func OnFirstOnly(filter filters.Filter) filters.Filter {
-	return filters.FilterFunc(func(ctx filters.Context, req *http.Request, next filters.Next) (*http.Response, filters.Context, error) {
-		requestNumber := ctx.RequestNumber()
+	return filters.FilterFunc(func(cs *filters.ConnectionState, req *http.Request, next filters.Next) (*http.Response, *filters.ConnectionState, error) {
+		requestNumber := cs.RequestNumber()
 		if requestNumber == 1 {
-			return filter.Apply(ctx, req, next)
+			return filter.Apply(cs, req, next)
 		}
-		return next(ctx, req)
+		return next(cs, req)
 	})
 }
 

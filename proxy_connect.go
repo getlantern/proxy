@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/getlantern/netx"
-	"github.com/getlantern/proxy/filters"
+	"github.com/getlantern/proxy/v2/filters"
 	"github.com/getlantern/reconn"
 )
 
@@ -60,11 +60,12 @@ type connectInterceptor struct {
 	okWaitsForUpstream bool
 }
 
-func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
-	return func(ctx filters.Context, modifiedReq *http.Request) (*http.Response, filters.Context, error) {
+func (proxy *proxy) nextCONNECT(dialCtx context.Context, downstream net.Conn, respondOK bool) filters.Next {
+	return func(cs *filters.ConnectionState, modifiedReq *http.Request) (*http.Response, *filters.ConnectionState, error) {
 		var resp *http.Response
 		upstreamAddr := modifiedReq.URL.Host
-		nextCtx := ctx.WithValue(ctxKeyUpstreamAddr, upstreamAddr)
+		nextCS := cs.Clone()
+		nextCS.SetUpstreamAddr(upstreamAddr)
 
 		if !proxy.OKWaitsForUpstream {
 			// We preemptively respond with an OK on the client. Some user agents like
@@ -77,11 +78,13 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 			// (mostly correctly) attribute that to a problem with the origin rather
 			// than the proxy and continue to consider the proxy good. See the extensive
 			// discussion here: https://github.com/getlantern/lantern/issues/5514.
-			resp, nextCtx = respondOK(resp, modifiedReq, nextCtx)
+			if respondOK {
+				resp, nextCS = doRespondOK(nextCS, modifiedReq)
+			}
 			if proxy.OKSendsServerTiming {
 				addDialUpstreamHeader(resp, 0)
 			}
-			return resp, nextCtx, nil
+			return resp, nextCS, nil
 		}
 
 		var start time.Time
@@ -92,14 +95,14 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 		// Note - for CONNECT requests, we use the Host from the request URL, not the
 		// Host header. See discussion here:
 		// https://ask.wireshark.org/questions/22988/http-host-header-with-and-without-port-number
-		dialCtx, cancelDial := addDialDeadlineIfNecessary(ctx, modifiedReq)
+		dialCtx, cancelDial := addDialDeadlineIfNecessary(dialCtx, modifiedReq)
 		upstream, err := proxy.Dial(dialCtx, true, "tcp", upstreamAddr)
 		cancelDial()
 		if err != nil {
 			if proxy.OKWaitsForUpstream {
-				return badGateway(ctx, modifiedReq, err)
+				return badGateway(cs, modifiedReq, err)
 			}
-			return nil, ctx, err
+			return nil, cs, err
 		}
 
 		// In this case, waited to successfully dial upstream before responding
@@ -108,13 +111,15 @@ func (proxy *proxy) nextCONNECT(downstream net.Conn) filters.Next {
 		// just in case that one is able to reach the origin. This is relevant,
 		// for example, if some proxy servers reside in jurisdictions where an
 		// origin site is blocked but other proxy servers don't.
-		resp, nextCtx = respondOK(resp, modifiedReq, nextCtx)
+		if respondOK {
+			resp, nextCS = doRespondOK(nextCS, modifiedReq)
+		}
 		if proxy.OKSendsServerTiming {
 			addDialUpstreamHeader(resp, time.Since(start))
 		}
 
-		nextCtx = nextCtx.WithValue(ctxKeyUpstream, upstream)
-		return resp, nextCtx, nil
+		nextCS.SetUpstream(upstream)
+		return resp, nextCS, nil
 	}
 }
 
@@ -146,25 +151,18 @@ func addDialDeadlineIfNecessary(ctx context.Context, req *http.Request) (context
 func noopCancel() {
 }
 
-func respondOK(resp *http.Response, req *http.Request, ctx filters.Context) (*http.Response, filters.Context) {
-	suppressOK := ctx.Value(ctxKeyNoRespondOkay) != nil
-	if !suppressOK {
-		resp, ctx, _ = filters.ShortCircuit(ctx, req, &http.Response{
-			StatusCode: http.StatusOK,
-		})
-	}
-	return resp, ctx
-}
-
-func (proxy *proxy) Connect(ctx context.Context, in io.Reader, conn net.Conn, origin string) error {
+func (proxy *proxy) Connect(dialCtx context.Context, in io.Reader, conn net.Conn, origin string) error {
 	pin := io.MultiReader(strings.NewReader(fmt.Sprintf(connectRequest, origin, origin)), in)
-	return proxy.Handle(context.WithValue(ctx, ctxKeyNoRespondOkay, "true"), pin, conn)
+	return proxy.handle(dialCtx, pin, conn, nil, false)
 }
 
-func (proxy *proxy) proceedWithConnect(ctx filters.Context, req *http.Request, upstreamAddr string, upstream net.Conn, downstream net.Conn) error {
+func (proxy *proxy) proceedWithConnect(
+	dialCtx context.Context, cs *filters.ConnectionState, req *http.Request,
+	upstreamAddr string, upstream net.Conn, downstream net.Conn, respondOK bool) error {
+
 	if upstream == nil {
 		var dialErr error
-		upstream, dialErr = proxy.Dial(ctx, true, "tcp", upstreamAddr)
+		upstream, dialErr = proxy.Dial(dialCtx, true, "tcp", upstreamAddr)
 		if dialErr != nil {
 			return dialErr
 		}
@@ -203,9 +201,9 @@ func (proxy *proxy) proceedWithConnect(ctx filters.Context, req *http.Request, u
 				fullDownstream := io.MultiReader(rr, downstream)
 				// Remove upstream info from context so that handle doesn't try to
 				// process this as a CONNECT
-				ctx = ctx.WithValue(ctxKeyUpstream, nil).WithValue(ctxKeyUpstreamAddr, nil)
-				ctx = ctx.WithMITMing()
-				return proxy.handle(ctx, fullDownstream, downstream, upstream)
+				cs.ClearUpstream()
+				cs.SetMITMing(true)
+				return proxy.handle(dialCtx, fullDownstream, downstream, upstream, respondOK)
 			}
 
 			// We couldn't read the first HTTP Request, fall back to piping data
@@ -237,9 +235,9 @@ func (proxy *proxy) proceedWithConnect(ctx filters.Context, req *http.Request, u
 	return nil
 }
 
-func badGateway(ctx filters.Context, req *http.Request, err error) (*http.Response, filters.Context, error) {
+func badGateway(cs *filters.ConnectionState, req *http.Request, err error) (*http.Response, *filters.ConnectionState, error) {
 	log.Debugf("Responding BadGateway: %v", err)
-	return filters.Fail(ctx, req, http.StatusBadGateway, err)
+	return filters.Fail(cs, req, http.StatusBadGateway, err)
 }
 
 type defaultBufferSource struct{ sync.Pool }
@@ -269,4 +267,12 @@ func (proxy *proxy) defaultShouldMITM(req *http.Request, upstreamAddr string) bo
 		}
 	}
 	return false
+}
+
+func doRespondOK(cs *filters.ConnectionState, req *http.Request) (*http.Response, *filters.ConnectionState) {
+	// filter.ShortCircuit never returns an error, so it's okay to ignore.
+	resp, nextCS, _ := filters.ShortCircuit(cs, req, &http.Response{
+		StatusCode: http.StatusOK,
+	})
+	return resp, nextCS
 }

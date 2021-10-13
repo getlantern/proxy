@@ -1,4 +1,4 @@
-module github.com/getlantern/proxy
+module github.com/getlantern/proxy/v2
 
 go 1.12
 

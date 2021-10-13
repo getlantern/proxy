@@ -9,22 +9,22 @@ import (
 // Intercept returns a Handler that intercepts the specified Handler with the
 // given Filter.
 func Intercept(handler http.Handler, filter Filter) http.Handler {
-	var conn net.Conn
 	return http.HandlerFunc(func(resp http.ResponseWriter, req *http.Request) {
-		getDownstream := func() net.Conn {
-			if conn == nil {
-				conn, _, _ = resp.(http.Hijacker).Hijack()
+		var cs *ConnectionState
+		cs.downstream = func() net.Conn {
+			if hj, ok := resp.(http.Hijacker); ok {
+				downstream, _, _ := hj.Hijack()
+				return downstream
 			}
-			return conn
+			return nil
 		}
-		ctx := BackgroundContext().WithValue(ctxKeyDownstream, getDownstream)
 
-		next := func(ctx Context, filteredReq *http.Request) (*http.Response, Context, error) {
+		next := func(cs *ConnectionState, filteredReq *http.Request) (*http.Response, *ConnectionState, error) {
 			handler.ServeHTTP(resp, filteredReq)
 			return nil, nil, nil
 		}
 
-		filteredResp, _, _ := filter.Apply(ctx, req, next)
+		filteredResp, _, _ := filter.Apply(cs, req, next)
 		if filteredResp != nil {
 			for key, value := range filteredResp.Header {
 				resp.Header()[key] = value

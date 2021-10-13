@@ -14,6 +14,10 @@ func (proxy *proxy) Serve(l net.Listener) error {
 		if err != nil {
 			return errors.New("Unable to accept: %v", err)
 		}
-		go proxy.Handle(context.Background(), conn, conn)
+		go func() {
+			if err := proxy.Handle(context.Background(), conn, conn); err != nil {
+				log.Errorf("Error handling connection %v:", err)
+			}
+		}()
 	}
 }
