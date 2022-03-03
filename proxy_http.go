@@ -63,7 +63,7 @@ func (proxy *proxy) logInitialReadError(downstream net.Conn, err error) error {
 	if strings.Contains(txt, "first record does not") {
 		return log.Errorf("Not a TLS client connection: %v from %v", err, r)
 	}
-	return log.Errorf("Initial ReadRequest: %v from %v", err, r)
+	return log.Errorf("%v from %v - Initial ReadRequest Error", err, r)
 }
 
 func (proxy *proxy) handle(dialCtx context.Context, downstreamIn io.Reader, downstream net.Conn, upstream net.Conn, respondOK bool) (err error) {
@@ -380,10 +380,8 @@ func prepareResponse(resp *http.Response, belowHTTP11 bool) *http.Response {
 
 // cloneURL provides update safe copy by avoiding shallow copying User field
 func cloneURL(i *url.URL) *url.URL {
+	// This generates a safe copy. See https://github.com/golang/go/issues/38351
 	out := *i
-	if i.User != nil {
-		out.User = &(*i.User)
-	}
 	return &out
 }
 
