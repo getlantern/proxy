@@ -8,7 +8,7 @@ require (
 	github.com/getlantern/golog v0.0.0-20230503153817-8e72de7e0a65
 	github.com/getlantern/idletiming v0.0.0-20200228204104-10036786eac5
 	github.com/getlantern/keyman v0.0.0-20230503155501-4e864ca2175b
-	github.com/getlantern/mitm v0.0.0-20231025101347-86bc546cc0ba
+	github.com/getlantern/mitm v0.0.0-20231025115752-54d3e43899b7
 	github.com/getlantern/mockconn v0.0.0-20200818071412-cb30d065a848
 	github.com/getlantern/netx v0.0.0-20211206143627-7ccfeb739cbd
 	github.com/getlantern/preconn v0.0.0-20180328114929-0b5766010efe

@@ -36,8 +36,8 @@ github.com/getlantern/iptool v0.0.0-20210721034953-519bf8ce0147 h1:/4ibPEIbC7c78
 github.com/getlantern/iptool v0.0.0-20210721034953-519bf8ce0147/go.mod h1:hfspzdRcvJ130tpTPL53/L92gG0pFtvQ6ln35ppwhHE=
 github.com/getlantern/keyman v0.0.0-20230503155501-4e864ca2175b h1:iyEuk8ARQC9HfraqC4r3leBhU55R1TV7bAiyPYE54kA=
 github.com/getlantern/keyman v0.0.0-20230503155501-4e864ca2175b/go.mod h1:ZJ+yDaZkJ/JU9j7EQa3UUh6ouedrNDDLA5OiowS1Iuk=
-github.com/getlantern/mitm v0.0.0-20231025101347-86bc546cc0ba h1:vlOwzXuz7J/Gy5RTT6DOHXEnQkg3oeKrw6uqt+gSnm8=
-github.com/getlantern/mitm v0.0.0-20231025101347-86bc546cc0ba/go.mod h1:sCAOk1Y9pRrLuK0sSH3Rz2lubOBIl04h7pD/+UZM/lc=
+github.com/getlantern/mitm v0.0.0-20231025115752-54d3e43899b7 h1:l9/yc7C0eaF4UQWgxAdtOnYKNfS74NMaInZ9vrlNKWI=
+github.com/getlantern/mitm v0.0.0-20231025115752-54d3e43899b7/go.mod h1:sCAOk1Y9pRrLuK0sSH3Rz2lubOBIl04h7pD/+UZM/lc=
 github.com/getlantern/mockconn v0.0.0-20191023022503-481dbcceeb58/go.mod h1:+F5GJ7qGpQ03DBtcOEyQpM30ix4BLswdaojecFtsdy8=
 github.com/getlantern/mockconn v0.0.0-20200818071412-cb30d065a848 h1:2MhMMVBTnaHrst6HyWFDhwQCaJ05PZuOv1bE2gN8WFY=
 github.com/getlantern/mockconn v0.0.0-20200818071412-cb30d065a848/go.mod h1:+F5GJ7qGpQ03DBtcOEyQpM30ix4BLswdaojecFtsdy8=
