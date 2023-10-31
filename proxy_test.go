@@ -24,7 +24,7 @@ import (
 	"github.com/getlantern/keyman"
 	"github.com/getlantern/mitm"
 	"github.com/getlantern/mockconn"
-	"github.com/getlantern/proxy/v2/filters"
+	"github.com/getlantern/proxy/v3/filters"
 	"github.com/getlantern/tlsdefaults"
 	"github.com/getlantern/waitforserver"
 	servertiming "github.com/mitchellh/go-server-timing"

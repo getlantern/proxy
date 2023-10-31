@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/getlantern/netx"
-	"github.com/getlantern/proxy/v2/filters"
+	"github.com/getlantern/proxy/v3/filters"
 	"github.com/getlantern/reconn"
 )
 

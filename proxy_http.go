@@ -14,7 +14,7 @@ import (
 	"github.com/getlantern/errors"
 	"github.com/getlantern/netx"
 	"github.com/getlantern/preconn"
-	"github.com/getlantern/proxy/v2/filters"
+	"github.com/getlantern/proxy/v3/filters"
 )
 
 func (opts *Opts) applyHTTPDefaults() {
