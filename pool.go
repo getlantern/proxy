@@ -25,7 +25,8 @@ func newBufferSource() bufferSource {
 	return &defaultBufferSource{
 		Pool: sync.Pool{
 			New: func() any {
-				return make([]byte, defaultBufferSize)
+				b := make([]byte, defaultBufferSize)
+				return &b
 			},
 		},
 	}
