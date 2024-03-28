@@ -22,7 +22,6 @@ import (
 	"github.com/getlantern/fdcount"
 	"github.com/getlantern/idletiming"
 	"github.com/getlantern/keyman"
-	"github.com/getlantern/mitm"
 	"github.com/getlantern/mockconn"
 	"github.com/getlantern/proxy/v3/filters"
 	"github.com/getlantern/tlsdefaults"
@@ -79,7 +78,7 @@ func TestRequestAware(t *testing.T) {
 			conn.Close()
 		}
 	}()
-	pr, err := New(&Opts{
+	pr := New(&Opts{
 		Dial: func(context context.Context, isConnect bool, transport, addr string) (net.Conn, error) {
 			conn, err = net.Dial(transport, addr)
 			if err != nil {
@@ -125,7 +124,7 @@ func TestDialFailureHTTP(t *testing.T) {
 			Body:       ioutil.NopCloser(bytes.NewReader([]byte(err.Error()))),
 		}
 	}
-	p := newProxy(&Opts{
+	p := New(&Opts{
 		OnError: onError,
 		Dial: func(context context.Context, isConnect bool, net, addr string) (net.Conn, error) {
 			return d.Dial(net, addr)
@@ -151,7 +150,7 @@ func TestDialFailureHTTP(t *testing.T) {
 
 func TestWriteFailure(t *testing.T) {
 	errorText := "I don't want to write"
-	p := newProxy(&Opts{
+	p := New(&Opts{
 		Dial: func(context context.Context, isConnect bool, net, addr string) (net.Conn, error) {
 			return mockconn.NewConn(nil, nil, nil, errors.New(errorText)), nil
 		},
@@ -169,7 +168,7 @@ func TestWriteFailure(t *testing.T) {
 
 func TestReadFailure(t *testing.T) {
 	errorText := "I don't want to read"
-	p := newProxy(&Opts{
+	p := New(&Opts{
 		Dial: func(context context.Context, isConnect bool, net, addr string) (net.Conn, error) {
 			return mockconn.NewConn(nil, nil, errors.New(errorText), nil), nil
 		},
@@ -187,7 +186,7 @@ func TestReadFailure(t *testing.T) {
 
 func TestSendsServerTimingOnWaitForUpstream(t *testing.T) {
 	d := mockconn.SlowDialer(mockconn.SucceedingDialer([]byte{}), 10*time.Millisecond)
-	p := newProxy(&Opts{
+	p := New(&Opts{
 		OKWaitsForUpstream:  true,
 		OKSendsServerTiming: true,
 		Dial: func(ctx context.Context, isConnect bool, net, addr string) (net.Conn, error) {
@@ -216,7 +215,7 @@ func TestSendsServerTimingOnWaitForUpstream(t *testing.T) {
 
 func TestSendsServerTimingOnNotWaitForUpstream(t *testing.T) {
 	d := mockconn.SlowDialer(mockconn.SucceedingDialer([]byte{}), 10*time.Millisecond)
-	p := newProxy(&Opts{
+	p := New(&Opts{
 		OKWaitsForUpstream:  false,
 		OKSendsServerTiming: true,
 		Dial: func(ctx context.Context, isConnect bool, net, addr string) (net.Conn, error) {
@@ -246,7 +245,7 @@ func TestSendsServerTimingOnNotWaitForUpstream(t *testing.T) {
 func TestDialFailureCONNECTWaitForUpstream(t *testing.T) {
 	errorText := "I don't want to dial"
 	d := mockconn.FailingDialer(errors.New(errorText))
-	p := newProxy(&Opts{
+	p := New(&Opts{
 		OKWaitsForUpstream: true,
 		Dial: func(ctx context.Context, isConnect bool, net, addr string) (net.Conn, error) {
 			return d.Dial(net, addr)
@@ -272,7 +271,7 @@ func TestDialFailureCONNECTWaitForUpstream(t *testing.T) {
 func TestDialFailureCONNECTDontWaitForUpstream(t *testing.T) {
 	errorText := "I don't want to dial"
 	d := mockconn.FailingDialer(errors.New(errorText))
-	p := newProxy(&Opts{
+	p := New(&Opts{
 		OKWaitsForUpstream: false,
 		Dial: func(ctx context.Context, isConnect bool, net, addr string) (net.Conn, error) {
 			return d.Dial(net, addr)
@@ -291,7 +290,7 @@ func TestDialFailureCONNECTDontWaitForUpstream(t *testing.T) {
 }
 
 func TestPanicRecover(t *testing.T) {
-	p := newProxy(&Opts{
+	p := New(&Opts{
 		Filter: filters.FilterFunc(func(cs *filters.ConnectionState, req *http.Request, next filters.Next) (*http.Response, *filters.ConnectionState, error) {
 			panic(errors.New("I'm panicking!"))
 		}),
@@ -316,7 +315,7 @@ func doTestConnect(t *testing.T, okWaitsForUpstream bool) {
 	receivedOrigin := ""
 	var mx sync.Mutex
 	d := mockconn.SucceedingDialer([]byte(successText))
-	p := newProxy(&Opts{
+	p := New(&Opts{
 		OKWaitsForUpstream: okWaitsForUpstream,
 		Dial: func(ctx context.Context, isConnect bool, net, addr string) (net.Conn, error) {
 			mx.Lock()
@@ -344,7 +343,7 @@ func doTestConnect(t *testing.T, okWaitsForUpstream bool) {
 }
 
 func TestShortCircuitHTTP(t *testing.T) {
-	p := newProxy(&Opts{
+	p := New(&Opts{
 		Filter: filters.FilterFunc(func(cs *filters.ConnectionState, req *http.Request, next filters.Next) (*http.Response, *filters.ConnectionState, error) {
 			return filters.ShortCircuit(cs, req, &http.Response{
 				Header:     make(http.Header),
@@ -365,7 +364,7 @@ func TestShortCircuitHTTP(t *testing.T) {
 }
 
 func TestShortCircuitCONNECT(t *testing.T) {
-	p := newProxy(&Opts{
+	p := New(&Opts{
 		Filter: filters.FilterFunc(func(cs *filters.ConnectionState, req *http.Request, next filters.Next) (*http.Response, *filters.ConnectionState, error) {
 			return filters.ShortCircuit(cs, req, &http.Response{
 				Header:     make(http.Header),
@@ -433,7 +432,7 @@ func TestHTTPDownstreamError(t *testing.T) {
 	}))
 	defer origin.Close()
 
-	p := newProxy(&Opts{
+	p := New(&Opts{
 		IdleTimeout: 30 * time.Second,
 		Dial: func(ctx context.Context, isConnect bool, network, addr string) (net.Conn, error) {
 			return net.Dial("tcp", origin.Listener.Addr().String())
@@ -576,24 +575,12 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 	})
 
 	isConnect := requestMethod == "CONNECT"
-	var mitmOpts *mitm.Opts
-	if shouldMITM {
-		mitmOpts = &mitm.Opts{
-			PKFile:   "proxypk.pem",
-			CertFile: "proxycert.pem",
-			ClientTLSConfig: &tls.Config{
-				RootCAs: serverCert.PoolContainingCert(),
-			},
-			Domains: []string{"localhost"},
-		}
-	}
 
-	p := newProxy(&Opts{
+	p := New(&Opts{
 		IdleTimeout:        30 * time.Second,
 		OKWaitsForUpstream: okWaitsForUpstream,
 		Filter:             filter,
 		Dial:               dial,
-		MITMOpts:           mitmOpts,
 	})
 
 	go p.Serve(pl)
@@ -725,11 +712,6 @@ func doTest(t *testing.T, requestMethod string, discardFirstRequest bool, okWait
 	assert.NoError(t, counter.AssertDelta(0), "All connections should have been closed")
 }
 
-func newProxy(opts *Opts) Proxy {
-	p, _ := New(opts)
-	return p
-}
-
 func roundTrip(p Proxy, req *http.Request, readResponse bool) (resp *http.Response, roundTripErr error, handleErr error) {
 	toSend := &bytes.Buffer{}
 	roundTripErr = req.Write(toSend)
@@ -830,7 +812,7 @@ func TestPipeliningWithIdleTimingServer(t *testing.T) {
 	}()
 
 	dialer := &net.Dialer{}
-	p := newProxy(&Opts{
+	p := New(&Opts{
 		Dial: func(ctx context.Context, isCONNECT bool, network, addr string) (net.Conn, error) {
 			conn, err := dialer.DialContext(ctx, network, addr)
 			if err != nil {
