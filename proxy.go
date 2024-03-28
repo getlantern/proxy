@@ -6,13 +6,9 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"regexp"
-	"sync"
 	"time"
 
-	"github.com/getlantern/errors"
 	"github.com/getlantern/golog"
-	"github.com/getlantern/mitm"
 	"github.com/getlantern/proxy/v3/filters"
 )
 
@@ -52,9 +48,6 @@ type Proxy interface {
 
 	// Serve runs a server on the given Listener
 	Serve(l net.Listener) error
-
-	// ApplyMITMOptions updates the configuration of the MITM interceptor
-	ApplyMITMOptions(MITMOpts *mitm.Opts) error
 }
 
 // RequestAware is an interface for connections that are able to modify requests
@@ -79,7 +72,7 @@ type Opts struct {
 	IdleTimeout time.Duration
 
 	// BufferSource specifies a BufferSource, leave nil to use default.
-	BufferSource BufferSource
+	BufferSource bufferSource
 
 	// Filter is an optional Filter that will be invoked for every Request
 	Filter filters.Filter
@@ -101,29 +94,14 @@ type Opts struct {
 
 	// Dial is the function that's used to dial upstream.
 	Dial DialFunc
-
-	// ShouldMITM is an optional function for determining whether or not the given
-	// HTTP CONNECT request to the given upstreamAddr is eligible for being MITM'ed.
-	ShouldMITM func(req *http.Request, upstreamAddr string) bool
-
-	// MITMOpts, if specified, instructs proxy to attempt to man-in-the-middle
-	// connections and handle them as an HTTP proxy. If the connection cannot be
-	// mitm'ed (e.g. Client Hello doesn't include an SNI header) or if the
-	// contents isn't HTTP, the connection is handled as normal without MITM.
-	MITMOpts *mitm.Opts
 }
 
 type proxy struct {
 	*Opts
-	mitmIC      *mitm.Interceptor
-	mitmDomains []*regexp.Regexp
-	mitmLock    sync.RWMutex
 }
 
-// New creates a new Proxy configured with the specified Opts. If there's an
-// error initializing MITM, this returns an mitmErr, however the proxy is still
-// usable (it just won't MITM).
-func New(opts *Opts) (newProxy Proxy, mitmErr error) {
+// New creates a new Proxy configured with the specified Opts.
+func New(opts *Opts) (newProxy Proxy) {
 	if opts.Dial == nil {
 		opts.Dial = func(ctx context.Context, isCONNECT bool, network, addr string) (conn net.Conn, err error) {
 			ctx, cancel := context.WithTimeout(ctx, defaultDialTimeout)
@@ -132,35 +110,21 @@ func New(opts *Opts) (newProxy Proxy, mitmErr error) {
 		}
 	}
 	p := &proxy{
-		Opts:        opts,
-		mitmDomains: make([]*regexp.Regexp, 0),
+		Opts: opts,
 	}
-	p.applyHTTPDefaults()
-	p.applyCONNECTDefaults()
-
-	return p, p.ApplyMITMOptions(opts.MITMOpts)
-}
-
-func (p *proxy) ApplyMITMOptions(MITMOpts *mitm.Opts) (mitmErr error) {
-	p.mitmLock.Lock()
-	defer p.mitmLock.Unlock()
-
-	if MITMOpts != nil {
-		p.mitmIC, mitmErr = mitm.Configure(MITMOpts)
-		if mitmErr != nil {
-			mitmErr = errors.New("Unable to configure MITM: %v", mitmErr)
-		} else {
-			for _, domain := range MITMOpts.Domains {
-				re, err := domainToRegex(domain)
-				if err != nil {
-					log.Errorf("Unable to convert domain %v to regex: %v", domain, err)
-				} else {
-					p.mitmDomains = append(p.mitmDomains, re)
-				}
-			}
-		}
+	// Apply defaults
+	if opts.Filter == nil {
+		opts.Filter = filters.FilterFunc(defaultFilter)
 	}
-	return
+	if opts.OnError == nil {
+		opts.OnError = defaultOnError
+	}
+
+	if p.BufferSource == nil {
+		p.BufferSource = newBufferSource()
+	}
+
+	return p
 }
 
 // OnFirstOnly returns a filter that applies the given filter only on the first

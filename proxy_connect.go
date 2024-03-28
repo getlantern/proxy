@@ -1,7 +1,6 @@
 package proxy
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -9,56 +8,15 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/getlantern/netx"
 	"github.com/getlantern/proxy/v3/filters"
-	"github.com/getlantern/reconn"
 )
 
 const (
 	connectRequest = "CONNECT %v HTTP/1.1\r\nHost: %v\r\n\r\n"
-
-	maxHTTPSize       = 2 << 15 // 64K
-	defaultBufferSize = 2 << 11 // 4K
 )
-
-// BufferSource is a source for buffers used in reading/writing.
-type BufferSource interface {
-	Get() []byte
-	Put(buf []byte)
-}
-
-func (proxy *proxy) applyCONNECTDefaults() {
-	// Apply defaults
-	if proxy.BufferSource == nil {
-		proxy.BufferSource = &defaultBufferSource{sync.Pool{
-			New: func() interface{} {
-				return make([]byte, defaultBufferSize)
-			},
-		}}
-	}
-	if proxy.ShouldMITM == nil {
-		proxy.ShouldMITM = proxy.defaultShouldMITM
-	} else {
-		orig := proxy.ShouldMITM
-		proxy.ShouldMITM = func(req *http.Request, upstreamAddr string) bool {
-			if !orig(req, upstreamAddr) {
-				return false
-			}
-			return proxy.defaultShouldMITM(req, upstreamAddr)
-		}
-	}
-}
-
-// interceptor configures an Interceptor.
-type connectInterceptor struct {
-	idleTimeout        time.Duration
-	bufferSource       BufferSource
-	dial               DialFunc
-	okWaitsForUpstream bool
-}
 
 func (proxy *proxy) nextCONNECT(dialCtx context.Context, downstream net.Conn, respondOK bool) filters.Next {
 	return func(cs *filters.ConnectionState, modifiedReq *http.Request) (*http.Response, *filters.ConnectionState, error) {
@@ -174,59 +132,24 @@ func (proxy *proxy) proceedWithConnect(
 	}()
 
 	var rr io.Reader
-	if proxy.ShouldMITM(req, upstreamAddr) {
-		proxy.mitmLock.RLock()
-		defer proxy.mitmLock.RUnlock()
-		// Try to MITM the connection
-		downstreamMITM, upstreamMITM, mitming, err := proxy.mitmIC.MITM(downstream, upstream)
-		if err != nil {
-			return log.Errorf("Unable to MITM connection: %v", err)
-		}
-		downstream = downstreamMITM
-		upstream = upstreamMITM
-		if mitming {
-			// Try to read HTTP request and process as HTTP assuming that requests
-			// (not including body) are always smaller than 65K. If this assumption is
-			// violated, we won't be able to process the data on this connection.
-			downstreamRR := reconn.Wrap(downstream, maxHTTPSize)
-			_, peekReqErr := http.ReadRequest(bufio.NewReader(downstreamRR))
-			var rrErr error
-			rr, rrErr = downstreamRR.Rereader()
-			if rrErr != nil {
-				// Reading request overflowed, abort
-				return log.Errorf("Unable to re-read data: %v", rrErr)
-			}
-			if peekReqErr == nil {
-				// Handle as HTTP, prepend already read HTTP request
-				fullDownstream := io.MultiReader(rr, downstream)
-				// Remove upstream info from context so that handle doesn't try to
-				// process this as a CONNECT
-				cs.ClearUpstream()
-				cs.SetMITMing(true)
-				return proxy.handle(dialCtx, fullDownstream, downstream, upstream, respondOK)
-			}
-
-			// We couldn't read the first HTTP Request, fall back to piping data
-		}
-	}
 
 	// Prepare to pipe data between the client and the proxy.
-	bufOut := proxy.BufferSource.Get()
-	bufIn := proxy.BufferSource.Get()
-	defer proxy.BufferSource.Put(bufOut)
-	defer proxy.BufferSource.Put(bufIn)
+	bufOut := proxy.BufferSource.get()
+	bufIn := proxy.BufferSource.get()
+	defer proxy.BufferSource.put(bufOut)
+	defer proxy.BufferSource.put(bufIn)
 
 	if rr != nil {
 		// We tried and failed to MITM. First copy already read data to upstream
 		// before we start piping as usual
-		_, copyErr := io.CopyBuffer(upstream, rr, bufOut)
+		_, copyErr := io.CopyBuffer(upstream, rr, *bufOut)
 		if copyErr != nil {
 			return log.Errorf("Error copying initial data to upstream: %v", copyErr)
 		}
 	}
 
 	// Pipe data between the client and the proxy.
-	writeErr, readErr := netx.BidiCopy(upstream, downstream, bufOut, bufIn)
+	writeErr, readErr := netx.BidiCopy(upstream, downstream, *bufOut, *bufIn)
 	if isUnexpected(readErr) {
 		return log.Errorf("Error piping data to downstream: %v", readErr)
 	} else if isUnexpected(writeErr) {
@@ -238,35 +161,6 @@ func (proxy *proxy) proceedWithConnect(
 func badGateway(cs *filters.ConnectionState, req *http.Request, err error) (*http.Response, *filters.ConnectionState, error) {
 	log.Debugf("Responding BadGateway: %v", err)
 	return filters.Fail(cs, req, http.StatusBadGateway, err)
-}
-
-type defaultBufferSource struct{ sync.Pool }
-
-func (dbs *defaultBufferSource) Get() []byte {
-	return dbs.Pool.Get().([]byte)
-}
-
-func (dbs *defaultBufferSource) Put(buf []byte) {
-	dbs.Pool.Put(buf)
-}
-
-func (proxy *proxy) defaultShouldMITM(req *http.Request, upstreamAddr string) bool {
-	proxy.mitmLock.RLock()
-	defer proxy.mitmLock.RUnlock()
-
-	if proxy.mitmIC == nil {
-		return false
-	}
-	host, _, err := net.SplitHostPort(upstreamAddr)
-	if err != nil {
-		return false
-	}
-	for _, mitmDomain := range proxy.mitmDomains {
-		if mitmDomain.MatchString(host) {
-			return true
-		}
-	}
-	return false
 }
 
 func doRespondOK(cs *filters.ConnectionState, req *http.Request) (*http.Response, *filters.ConnectionState) {
