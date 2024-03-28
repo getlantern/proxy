@@ -16,16 +16,7 @@ import (
 
 const (
 	connectRequest = "CONNECT %v HTTP/1.1\r\nHost: %v\r\n\r\n"
-
-	maxHTTPSize = 2 << 15 // 64K
 )
-
-func (proxy *proxy) applyCONNECTDefaults() {
-	// Apply defaults
-	if proxy.BufferSource == nil {
-		proxy.BufferSource = newBufferSource()
-	}
-}
 
 func (proxy *proxy) nextCONNECT(dialCtx context.Context, downstream net.Conn, respondOK bool) filters.Next {
 	return func(cs *filters.ConnectionState, modifiedReq *http.Request) (*http.Response, *filters.ConnectionState, error) {

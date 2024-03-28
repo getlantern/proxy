@@ -112,8 +112,17 @@ func New(opts *Opts) (newProxy Proxy) {
 	p := &proxy{
 		Opts: opts,
 	}
-	p.applyHTTPDefaults()
-	p.applyCONNECTDefaults()
+	// Apply defaults
+	if opts.Filter == nil {
+		opts.Filter = filters.FilterFunc(defaultFilter)
+	}
+	if opts.OnError == nil {
+		opts.OnError = defaultOnError
+	}
+
+	if p.BufferSource == nil {
+		p.BufferSource = newBufferSource()
+	}
 
 	return p
 }

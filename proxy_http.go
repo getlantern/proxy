@@ -17,16 +17,6 @@ import (
 	"github.com/getlantern/proxy/v3/filters"
 )
 
-func (opts *Opts) applyHTTPDefaults() {
-	// Apply defaults
-	if opts.Filter == nil {
-		opts.Filter = filters.FilterFunc(defaultFilter)
-	}
-	if opts.OnError == nil {
-		opts.OnError = defaultOnError
-	}
-}
-
 // Handle implements the interface Proxy
 func (proxy *proxy) Handle(dialCtx context.Context, downstreamIn io.Reader, downstream net.Conn) (err error) {
 	return proxy.handle(dialCtx, downstreamIn, downstream, nil, true)
