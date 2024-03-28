@@ -7,7 +7,7 @@ func BenchmarkPool(b *testing.B) {
 
 	source := newBufferSource()
 	for i := 0; i < b.N; i++ {
-		buf := source.get()
-		source.put(buf)
+		buf := source.Get()
+		source.Put(buf)
 	}
 }

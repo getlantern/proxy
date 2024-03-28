@@ -134,10 +134,10 @@ func (proxy *proxy) proceedWithConnect(
 	var rr io.Reader
 
 	// Prepare to pipe data between the client and the proxy.
-	bufOut := proxy.BufferSource.get()
-	bufIn := proxy.BufferSource.get()
-	defer proxy.BufferSource.put(bufOut)
-	defer proxy.BufferSource.put(bufIn)
+	bufOut := proxy.BufferSource.Get()
+	bufIn := proxy.BufferSource.Get()
+	defer proxy.BufferSource.Put(bufOut)
+	defer proxy.BufferSource.Put(bufIn)
 
 	if rr != nil {
 		// We tried and failed to MITM. First copy already read data to upstream

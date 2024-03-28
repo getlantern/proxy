@@ -6,22 +6,22 @@ import (
 
 const defaultBufferSize = 2 << 11 // 4K
 
-type bufferSource interface {
-	get() *[]byte
-	put(buf *[]byte)
+type BufferSource interface {
+	Get() *[]byte
+	Put(buf *[]byte)
 }
 
 type defaultBufferSource struct{ sync.Pool }
 
-func (dbs *defaultBufferSource) get() *[]byte {
+func (dbs *defaultBufferSource) Get() *[]byte {
 	return dbs.Pool.Get().(*[]byte)
 }
 
-func (dbs *defaultBufferSource) put(buf *[]byte) {
+func (dbs *defaultBufferSource) Put(buf *[]byte) {
 	dbs.Pool.Put(buf)
 }
 
-func newBufferSource() bufferSource {
+func newBufferSource() BufferSource {
 	return &defaultBufferSource{
 		Pool: sync.Pool{
 			New: func() any {

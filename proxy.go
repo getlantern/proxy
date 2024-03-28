@@ -72,7 +72,7 @@ type Opts struct {
 	IdleTimeout time.Duration
 
 	// BufferSource specifies a BufferSource, leave nil to use default.
-	BufferSource bufferSource
+	BufferSource BufferSource
 
 	// Filter is an optional Filter that will be invoked for every Request
 	Filter filters.Filter
